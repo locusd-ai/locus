@@ -1,0 +1,11 @@
+[package]
+name = "biem-core"
+description = "Shared types and error definitions for BIEM"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+roaring = { workspace = true }

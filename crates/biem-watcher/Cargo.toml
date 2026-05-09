@@ -1,0 +1,10 @@
+[package]
+name = "biem-watcher"
+description = "SourceFeed trait and filesystem watcher implementation"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+biem-core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

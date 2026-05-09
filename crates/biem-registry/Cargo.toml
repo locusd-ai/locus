@@ -1,0 +1,9 @@
+[package]
+name = "biem-registry"
+description = "Registry trait and implementations (DuckDB first)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+biem-core = { workspace = true }
+thiserror = { workspace = true }

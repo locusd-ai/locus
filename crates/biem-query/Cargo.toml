@@ -1,0 +1,15 @@
+[package]
+name = "biem-query"
+description = "Query engine — bitmap intersection, filter resolution, metadata assembly"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+biem-core = { workspace = true }
+biem-registry = { workspace = true }
+biem-bitmap = { workspace = true }
+roaring = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

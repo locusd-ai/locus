@@ -1,0 +1,19 @@
+[package]
+name = "biem-daemon"
+description = "Daemon binary for BIEM (biemd) — watcher, ingestion, optional MCP/HTTP"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "biemd"
+path = "src/main.rs"
+
+[dependencies]
+biem-core = { workspace = true }
+biem-query = { workspace = true }
+biem-ingest = { workspace = true }
+biem-watcher = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

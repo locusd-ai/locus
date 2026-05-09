@@ -1,0 +1,17 @@
+[package]
+name = "biem-cli"
+description = "CLI binary for BIEM (biem)"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "biem"
+path = "src/main.rs"
+
+[dependencies]
+biem-core = { workspace = true }
+biem-query = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

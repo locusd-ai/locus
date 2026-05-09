@@ -24,6 +24,7 @@ BIEM (Bit-Indexed External Memory) is a local-first indexing and retrieval engin
 - Architecture decisions are documented before implementation
 - Changes to contracts or schemas must be reflected in **both** `001-system-overview.md` and `003-contracts.md` — keep them aligned
 - When making a decision, record it with rationale and alternatives considered
+- Per-module design docs (`docs/modules/<crate>.md`) only when internal complexity warrants it — don't preemptively document trivial modules
 
 ### Diagrams
 - Use Mermaid for all diagrams (class, ER, sequence, flowchart, gantt)

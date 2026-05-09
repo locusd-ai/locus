@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/biem-core",
+    "crates/biem-parser",
+    "crates/biem-registry",
+    "crates/biem-bitmap",
+    "crates/biem-ingest",
+    "crates/biem-watcher",
+    "crates/biem-query",
+    "crates/biem-cli",
+    "crates/biem-daemon",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Internal crates
+biem-core = { path = "crates/biem-core" }
+biem-parser = { path = "crates/biem-parser" }
+biem-registry = { path = "crates/biem-registry" }
+biem-bitmap = { path = "crates/biem-bitmap" }
+biem-ingest = { path = "crates/biem-ingest" }
+biem-watcher = { path = "crates/biem-watcher" }
+biem-query = { path = "crates/biem-query" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling & logging
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Bitmap
+roaring = "0.10"
+
+# Hashing
+blake3 = "1"
+
+# Storage — will be needed by implementations
+# duckdb = "1"
+# heed = "0.20"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async runtime (daemon only)
+tokio = { version = "1", features = ["full"] }

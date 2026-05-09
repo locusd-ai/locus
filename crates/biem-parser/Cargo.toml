@@ -1,0 +1,9 @@
+[package]
+name = "biem-parser"
+description = "Parser trait and implementations (Markdown first)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+biem-core = { workspace = true }
+thiserror = { workspace = true }

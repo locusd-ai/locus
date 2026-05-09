@@ -1,0 +1,14 @@
+[package]
+name = "biem-ingest"
+description = "Ingestion pipeline — orchestrates parsers, registry, and bitmap store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+biem-core = { workspace = true }
+biem-parser = { workspace = true }
+biem-registry = { workspace = true }
+biem-bitmap = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
