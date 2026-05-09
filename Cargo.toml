@@ -46,7 +46,10 @@ blake3 = "1"
 
 # Storage — will be needed by implementations
 # duckdb = "1"
-# heed = "0.20"
+heed = "0.20"
+
+# Testing
+tempfile = "3"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

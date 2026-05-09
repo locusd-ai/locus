@@ -3,4 +3,4 @@
 pub use biem_core::{BitmapStore, BitmapError};
 
 pub mod memory;
-// TODO: pub mod lmdb;
+pub mod lmdb;

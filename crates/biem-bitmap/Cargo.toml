@@ -8,3 +8,8 @@ edition.workspace = true
 biem-core = { workspace = true }
 roaring = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+heed = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
