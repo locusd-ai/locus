@@ -86,10 +86,49 @@ pub struct LinkRef {
 pub struct Chunk {
     /// Byte range within the source file
     pub byte_range: Range<usize>,
-    /// The heading text that starts this chunk, if any
-    pub heading: Option<String>,
-    /// Heading depth (1 = #, 2 = ##, etc.), 0 if no heading
+    /// What kind of chunk this is
+    pub kind: ChunkKind,
+    /// Human-readable label (heading text, function name, class name)
+    pub label: Option<String>,
+    /// Nesting depth (heading depth for markdown, scope depth for code)
     pub depth: u8,
+    /// Structured metadata specific to the chunk kind
+    pub metadata: ChunkMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChunkKind {
+    // Document chunks
+    Section,        // Markdown section under a heading
+    Frontmatter,    // YAML frontmatter block
+    Body,           // Entire document body (no headings)
+
+    // Code chunks (future)
+    Function,
+    Method,
+    Class,
+    Module,
+    Import,
+    Constant,
+}
+
+/// Kind-specific metadata. Avoids polluting every chunk
+/// with fields only relevant to one type.
+#[derive(Debug, Clone, Default)]
+pub struct ChunkMetadata {
+    /// For code: function signature, class declaration line
+    pub signature: Option<String>,
+    /// For code: language identifier
+    pub language: Option<String>,
+    /// For code: visibility/export status
+    pub visibility: Option<Visibility>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Visibility {
+    Public,
+    Private,
+    Internal, // e.g., pub(crate) in Rust
 }
 
 /// The complete output of parsing a single file.
@@ -169,10 +208,12 @@ pub struct DocRecord {
 pub struct ChunkRecord {
     pub chunk_id: ChunkId,
     pub doc_id: DocId,
+    pub kind: ChunkKind,
     pub byte_start: u32,
     pub byte_end: u32,
-    pub heading: Option<String>,
-    pub heading_depth: u8,
+    pub label: Option<String>,
+    pub depth: u8,
+    pub metadata: ChunkMetadata,
 }
 
 /// Metadata about a bitmap, stored in the catalog.
@@ -195,10 +236,12 @@ pub struct NewDoc {
 /// Input for registering chunks belonging to a document.
 pub struct NewChunk {
     pub doc_id: DocId,
+    pub kind: ChunkKind,
     pub byte_start: u32,
     pub byte_end: u32,
-    pub heading: Option<String>,
-    pub heading_depth: u8,
+    pub label: Option<String>,
+    pub depth: u8,
+    pub metadata: ChunkMetadata,
 }
 
 pub trait Registry: Send + Sync {
@@ -530,9 +573,10 @@ pub struct MatchPointer {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChunkPointer {
     pub chunk_id: ChunkId,
+    pub kind: String,           // Serialized ChunkKind
     pub byte_start: u32,
     pub byte_end: u32,
-    pub heading: Option<String>,
+    pub label: Option<String>,
 }
 
 /// The result of a query.
@@ -640,38 +684,7 @@ GET  /v1/filters    ?category=tag         → Vec<BitmapCatalogEntry>
 
 ## 9. Module Dependency Graph
 
-```mermaid
-graph BT
-    CORE["biem-core<br/>(shared types)"]
-    PARSER["biem-parser<br/>(Parser trait + MarkdownParser)"]
-    REG["biem-registry<br/>(Registry trait + DuckDB impl)"]
-    BITMAP["biem-bitmap<br/>(BitmapStore trait + LMDB impl)"]
-    INGEST["biem-ingest<br/>(IngestionPipeline)"]
-    QUERY["biem-query<br/>(QueryEngine)"]
-    WATCH["biem-watcher<br/>(SourceFeed trait + FsWatcher)"]
-    CLI["biem-cli"]
-    MCP["biem-mcp"]
-    HTTP["biem-http"]
-
-    PARSER --> CORE
-    REG --> CORE
-    BITMAP --> CORE
-    INGEST --> CORE
-    INGEST --> PARSER
-    INGEST --> REG
-    INGEST --> BITMAP
-    QUERY --> CORE
-    QUERY --> REG
-    QUERY --> BITMAP
-    WATCH --> CORE
-    CLI --> QUERY
-    CLI --> INGEST
-    CLI --> WATCH
-    MCP --> QUERY
-    HTTP --> QUERY
-```
-
-Each box is a Rust crate in the workspace. Arrows point from dependent → dependency.
+See §11 Q4 for the updated dependency graph and crate structure.
 
 ---
 
@@ -699,26 +712,226 @@ biem/
 
 ---
 
-## 11. Open Questions
+## 11. Resolved Design Decisions
 
-### Q1: Trait objects vs generics?
+### Q1: Trait objects vs generics
 
-The contracts above use `Box<dyn Trait>` for flexibility. For a single-implementation system this adds indirection. Should we use generics (`IngestionPipeline<R: Registry, B: BitmapStore>`) for compile-time dispatch and switch to trait objects only when we need runtime polymorphism (e.g., multiple parsers)?
+**Context**: In Rust, there are two ways to use traits:
+- **Generics** (`fn process<R: Registry>(reg: &R)`) — the compiler generates specialised code for each concrete type. Zero runtime overhead (no virtual dispatch), but every consumer must be generic too, which "infects" upward through the call stack.
+- **Trait objects** (`fn process(reg: &dyn Registry)`) — one compiled function, dispatches via vtable pointer at runtime. Tiny overhead (~1-2ns per call), but much simpler code.
+
+**Comparison for BIEM**:
+
+| Factor | Generics | Trait objects |
+|--------|----------|---------------|
+| Performance | Zero-cost dispatch | ~1-2ns vtable overhead per call |
+| Code complexity | Every struct/fn that touches Registry or BitmapStore becomes generic — `IngestionPipeline<R: Registry, B: BitmapStore, P: Parser>` cascades everywhere | Clean, non-generic structs |
+| Compile times | Longer — monomorphisation generates code per type combination | Shorter — one version per function |
+| Pluggability | Must know all types at compile time | Can swap implementations at runtime (e.g., test mocks) |
+| Testing | Need generic test helpers or concrete types | Easy to mock — just implement the trait |
+
+**The Scala parallel**: If you're used to Scala, trait objects are like using `trait Registry` with standard subtyping (`impl: DuckDbRegistry extends Registry`). Generics are like Scala's `F[_]` / tagless final style — powerful but adds complexity at every layer.
+
+**Decision: Trait objects (`Box<dyn Trait>` / `Arc<dyn Trait>`) for v1.**
+
+Reasons:
+1. BIEM's hot path is bitmap intersection and LMDB reads — measured in microseconds. A 1-2ns vtable dispatch is noise.
+2. It makes testing dramatically easier — mock Registry and BitmapStore without generics gymnastics.
+3. The code stays readable for a v1. You can always switch a specific hot path to generics later if profiling shows it matters.
+4. With only one implementation per trait in Phase 1, there's no compile-time benefit from generics anyway.
+
+**Roadmap**: If profiling later shows vtable dispatch in the query engine hot loop is measurable (unlikely), refactor `BitmapStore::get` to a generic. Estimated effort: small — one crate boundary change, no cascading.
 
 ### Q2: Error strategy
 
-Should we use a unified `Biem Error` enum (one error type for the whole system) or keep per-module errors with conversions? Per-module is cleaner for library consumers but more boilerplate.
+**Decision: Per-module errors with `thiserror`, plus structured logging via `tracing`.**
 
-### Q3: Sync vs Async
+Each module defines its own error enum:
+```rust
+// biem-registry
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryError { ... }
 
-The contracts above are synchronous. LMDB and DuckDB are both synchronous libraries. The MCP and HTTP interfaces will need async (tokio). Should the boundary be:
-- Core modules (registry, bitmap, query) are sync
-- Interface layer wraps them in `spawn_blocking` / `block_in_place`
+// biem-bitmap
+#[derive(Debug, thiserror::Error)]
+pub enum BitmapError { ... }
+```
 
-### Q4: Should CLI, MCP, and HTTP be separate binaries or one binary with subcommands?
+Higher-level modules (ingestion, query engine) define errors that wrap lower-level ones:
+```rust
+// biem-ingest
+#[derive(Debug, thiserror::Error)]
+pub enum IngestError {
+    #[error("registry: {0}")]
+    Registry(#[from] RegistryError),
+    #[error("bitmap: {0}")]
+    Bitmap(#[from] BitmapError),
+    #[error("parse: {0}")]
+    Parse(#[from] ParseError),
+    ...
+}
+```
 
-Options:
-- **Separate**: `biem` (CLI), `biem-server` (MCP + HTTP)
-- **Combined**: `biem search ...` (CLI), `biem serve` (starts MCP + HTTP)
+The `#[from]` attribute auto-generates `From` conversions, so `?` propagation works naturally across module boundaries. This is idiomatic Rust — no unified error enum, no `anyhow` in library crates.
 
-Combined is simpler to distribute but the server needs to run as a daemon.
+**Logging**: Use the `tracing` crate throughout. It's the Rust ecosystem standard and supports:
+- Structured key-value fields (not just string messages)
+- Spans (trace a single ingestion event through parse → registry → bitmap)
+- Multiple subscribers (stdout for CLI, JSON for daemon, filtering by module)
+
+```rust
+use tracing::{info, warn, instrument};
+
+#[instrument(skip(content))]
+fn process_event(&mut self, event: ChangeEvent) -> Result<IngestResult, IngestError> {
+    info!(path = %event.path.display(), kind = ?event.kind, "processing change");
+    // ...
+    warn!(doc_id = id, "file hash unchanged, skipping");
+}
+```
+
+Each crate uses `tracing` for instrumentation. The binary crates (CLI, daemon) configure the subscriber (format, level, output).
+
+### Q3: Sync vs Async + Storage pluggability
+
+**Decision: Sync core, async at the interface boundary. Registry trait is pluggable (DuckDB first). BitmapStore trait is pluggable but LMDB is the only practical option.**
+
+**Sync/async boundary**:
+- `Registry`, `BitmapStore`, `QueryEngine`, `IngestionPipeline` — all synchronous
+- The daemon process runs a tokio runtime for MCP/HTTP
+- MCP/HTTP handlers call into sync code via `tokio::task::spawn_blocking`
+
+This is clean because DuckDB and LMDB are both fundamentally synchronous (direct memory-mapped I/O). Wrapping them in async would add complexity with no benefit.
+
+**Registry pluggability** — yes, makes sense:
+
+The `Registry` trait (§3 of this doc) is already abstract. `DuckDbRegistry` is the first implementation. Possible future alternatives:
+
+| Backend | Why you might want it |
+|---------|----------------------|
+| DuckDB | Columnar, great for analytical queries on catalog, bulk inserts |
+| SQLite | Lighter weight, single-file, well-understood |
+| chDB | Native Roaring Bitmap SQL functions (explored in Gemini docs) |
+
+The trait boundary is already there — swapping is just a new crate implementing `Registry`.
+
+**BitmapStore pluggability** — trait is pluggable, but alternatives are limited:
+
+| Backend | Viable? | Notes |
+|---------|---------|-------|
+| LMDB (heed) | ✅ Primary | Memory-mapped, zero-copy reads, ACID, mature |
+| RocksDB | ⚠️ Possible | Write-optimised (LSM), but heavier footprint, no memory-mapping advantage for reads |
+| Sled | ⚠️ Possible | Pure Rust, but less mature, uncertain maintenance |
+| Plain files | ⚠️ MVP only | One file per bitmap — simplest, but no transactions, no atomicity |
+| In-memory only | ⚠️ Testing | Good for unit tests, not persistent |
+
+LMDB is the right choice because:
+1. Memory-mapped reads = zero-copy bitmap deserialisation
+2. ACID transactions for multi-bitmap writes during ingestion
+3. Tiny footprint (~100KB binary)
+4. The `heed` crate is well-maintained and ergonomic
+
+The trait exists for testability (in-memory mock) more than for swapping backends. But if someone needed RocksDB for write-heavy workloads, the door is open.
+
+### Q4: Binary layout + daemon architecture
+
+**Decision: Two binaries — `biem` (CLI) and `biemd` (daemon). Daemon runs watcher + ingestion and optionally exposes MCP and HTTP.**
+
+```mermaid
+graph LR
+    subgraph biem["biem (CLI binary)"]
+        CLI_CMD["search, inspect, status,<br/>init, config, compact"]
+    end
+
+    subgraph biemd["biemd (daemon binary)"]
+        WATCH["Watcher"]
+        INGEST["Ingestion"]
+        MCP_S["MCP Server<br/>(opt-in)"]
+        HTTP_S["HTTP API<br/>(opt-in)"]
+        QE["Query Engine"]
+    end
+
+    biem -- "connects to daemon<br/>(Unix socket / HTTP)" --> biemd
+    MCP_S --> QE
+    HTTP_S --> QE
+    CLI_CMD --> QE
+```
+
+**How it works**:
+
+```
+biemd                           # start daemon (watcher + ingestion)
+biemd --mcp                     # start daemon + MCP server
+biemd --http                    # start daemon + HTTP API
+biemd --mcp --http              # start daemon + both
+
+biem search --tag work          # CLI talks to running daemon
+biem init /path/to/vault        # registers vault, daemon picks it up
+biem status                     # queries daemon for index health
+```
+
+**Why two binaries**:
+- The daemon is a long-running background process (watcher, ingestion, optional servers). It holds the LMDB and DuckDB connections open.
+- The CLI is a short-lived process that sends a request and exits. It connects to the daemon to query.
+- This avoids the CLI needing to open its own database connections (which could conflict with the daemon's locks).
+
+**CLI fallback for development**: During early development (before the daemon exists), the CLI can open databases directly in "standalone" mode. This lets us build and test the foundation crates without needing the daemon yet.
+
+```
+biem search --tag work                    # connects to daemon (default)
+biem search --tag work --standalone       # opens DB directly (dev mode)
+```
+
+**Is it difficult to change later?** No. The key insight is that both `biem` and `biemd` depend on the same `biem-query` crate. The binary layout is just plumbing — which binary instantiates the query engine. Merging them into a single binary later (or splitting further) is a half-day refactor because the actual logic lives in library crates.
+
+**Updated crate structure**:
+
+```
+biem/
+├── Cargo.toml                  # workspace root
+├── crates/
+│   ├── biem-core/              # shared types, errors
+│   ├── biem-parser/            # Parser trait + MarkdownParser
+│   ├── biem-registry/          # Registry trait + DuckDB impl
+│   ├── biem-bitmap/            # BitmapStore trait + LMDB impl
+│   ├── biem-ingest/            # IngestionPipeline
+│   ├── biem-watcher/           # SourceFeed trait + FsWatcher
+│   ├── biem-query/             # QueryEngine
+│   ├── biem-cli/               # `biem` binary
+│   └── biem-daemon/            # `biemd` binary (watcher + optional MCP/HTTP)
+├── docs/
+│   └── architecture/
+└── tests/
+    └── fixtures/               # Sample vault files for testing
+```
+
+**Updated dependency graph**:
+
+```mermaid
+graph BT
+    CORE["biem-core<br/>(shared types)"]
+    PARSER["biem-parser<br/>(Parser trait + MarkdownParser)"]
+    REG["biem-registry<br/>(Registry trait + DuckDB impl)"]
+    BITMAP["biem-bitmap<br/>(BitmapStore trait + LMDB impl)"]
+    INGEST["biem-ingest<br/>(IngestionPipeline)"]
+    QUERY["biem-query<br/>(QueryEngine)"]
+    WATCH["biem-watcher<br/>(SourceFeed trait + FsWatcher)"]
+    CLI["biem-cli<br/>(biem binary)"]
+    DAEMON["biem-daemon<br/>(biemd binary)"]
+
+    PARSER --> CORE
+    REG --> CORE
+    BITMAP --> CORE
+    INGEST --> CORE
+    INGEST --> PARSER
+    INGEST --> REG
+    INGEST --> BITMAP
+    QUERY --> CORE
+    QUERY --> REG
+    QUERY --> BITMAP
+    WATCH --> CORE
+    CLI --> QUERY
+    DAEMON --> QUERY
+    DAEMON --> INGEST
+    DAEMON --> WATCH
+```
