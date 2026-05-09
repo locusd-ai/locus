@@ -4,10 +4,10 @@
 //! IDs, enums, chunk model, and the trait definitions for Registry
 //! and BitmapStore.
 
-mod types;
-mod parser;
-mod registry;
-mod bitmap;
+pub mod types;
+pub mod parser;
+pub mod registry;
+pub mod bitmap;
 
 pub use types::*;
 pub use parser::*;
