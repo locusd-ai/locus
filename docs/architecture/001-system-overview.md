@@ -20,6 +20,8 @@
 
 BIEM is a **local indexing and filtering service**. It does not retrieve content — it tells you *where* the relevant content is and *why* it matched, then the consumer decides what to read.
 
+**Core goal: minimise context pollution.** LLMs degrade when given irrelevant context. BIEM's job is to ensure only the most structurally relevant pointers reach the model — not "here are 50 similar notes", but "here are the 3 notes that are tagged #work, typed as tasks, and linked to your current project". The bitmap pre-filter eliminates noise *before* any semantic or LLM processing, so the model's limited context window is spent on signal, not noise.
+
 ```mermaid
 graph LR
     subgraph Sources["Data Sources"]
@@ -410,7 +412,289 @@ After initial indexing completes, the watcher starts and all subsequent changes 
 
 ---
 
-## 9. Phase 1 Module Build Sequence (Proposed)
+## 9. Exploration: 32-bit vs 64-bit ID Space
+
+### The question
+
+Should `DocId` and `ChunkId` be `u32` or `u64`? And should users be able to choose?
+
+### Capacity analysis
+
+| ID width | Max IDs | Enough for... |
+|----------|---------|---------------|
+| `u32` | ~4.29 billion | ~4.29B chunks across all sources |
+| `u64` | ~18.4 quintillion | Effectively unlimited |
+
+Let's estimate realistic upper bounds:
+
+| Scenario | Documents | Avg chunks/doc | Total chunks |
+|----------|-----------|----------------|-------------|
+| Personal Obsidian vault | 10,000 | 5 | 50,000 |
+| Large Obsidian vault | 100,000 | 5 | 500,000 |
+| Single large codebase | 50,000 files | 20 (functions/classes) | 1,000,000 |
+| 10 large repos | 500,000 files | 20 | 10,000,000 |
+| Enterprise (100 repos, aggressive chunking) | 5,000,000 files | 30 | 150,000,000 |
+
+Even the extreme enterprise case uses ~150M IDs — **3.5% of `u32` space**. You'd need ~860 enterprise-scale organisations in a single index to exhaust `u32`.
+
+### The Roaring Bitmap constraint
+
+This is the critical factor. Standard Roaring Bitmaps operate on **32-bit integers only**.
+
+| | 32-bit Roaring | 64-bit Roaring |
+|---|---|---|
+| Crate | `roaring` (mature, well-optimised) | `roaring` has `Treemap` (a `BTreeMap<u32, RoaringBitmap>`) |
+| SIMD acceleration | Yes — full AVX2/NEON support | Partial — SIMD within each 32-bit partition, overhead between partitions |
+| Portable format | Standard, cross-language | No standard portable format for 64-bit |
+| Memory overhead | Minimal | Extra `BTreeMap` layer per bitmap |
+| Set operations (AND/OR) | Single pass, cache-friendly | Must align and iterate partitions |
+
+The 64-bit `Treemap` in the `roaring` crate works by splitting the 64-bit space into high-32 / low-32 partitions. If your IDs are all in the low range (which they will be — monotonically increasing from 0), every ID falls into partition 0, and you're effectively using 32-bit Roaring with extra wrapper overhead.
+
+If IDs are **sparse across the 64-bit space** (e.g., hashed IDs), the `Treemap` adds real overhead on every set operation.
+
+### What about separate ID spaces?
+
+Currently the architecture uses a **single ID space** for all chunks across all sources. An alternative:
+
+```
+Option A (current): Single monotonic ID space
+  doc_id: u32 = 0, 1, 2, 3, ...
+  chunk_id: u32 = 0, 1, 2, 3, ...
+  All bitmaps use the same ID space.
+
+Option B: Partitioned ID space
+  High bits = source/partition, low bits = local ID
+  e.g., u32 with top 8 bits = source → 256 sources × 16M docs each
+  Still u32, but structured.
+
+Option C: Two-tier IDs
+  doc_id: u32 (used in structural bitmaps — tags, folders, links)
+  chunk_id: u32 (used in future semantic/vector index)
+  Bitmaps only index doc_ids. Chunks are resolved via registry lookup.
+```
+
+**Option C is what we already have** — the bitmap store indexes `DocId`, and chunks are a registry detail. The semantic layer (Phase 2) would use `ChunkId` for its vector index, but Roaring Bitmaps never need to hold chunk IDs.
+
+This means the bitmap capacity question is really: **how many documents (files)?** Not chunks. And `u32` gives us 4.29 billion files — well beyond any realistic scenario.
+
+### Could we make it configurable?
+
+Technically yes, via a generic:
+
+```rust
+pub trait IdWidth: Copy + Ord + Hash + Into<u64> + TryFrom<u64> {
+    type Bitmap: BitmapOps;
+}
+
+impl IdWidth for u32 {
+    type Bitmap = RoaringBitmap;     // standard, fast
+}
+
+impl IdWidth for u64 {
+    type Bitmap = RoaringTreemap;    // wrapper, slower
+}
+```
+
+But this adds generic parameters to **every module** (`Registry<I: IdWidth>`, `BitmapStore<I: IdWidth>`, `QueryEngine<I: IdWidth>`). For a benefit that's never triggered in practice, it's significant complexity.
+
+### 64-bit SIMD support — does it exist?
+
+The key operations for bitmap search are XOR and POPCNT on wide registers:
+
+| ISA | Register width | Instructions | Status |
+|-----|---------------|-------------|--------|
+| x86 AVX2 | 256-bit | `vpxor`, `vpopcntq` (Ice Lake+) | Widely available. Operates on 4×64-bit or 8×32-bit lanes — **the integer width inside the lane doesn't matter for raw bitwise ops** |
+| x86 AVX-512 | 512-bit | `vpxorq`, `vpopcntq` | Available on server CPUs, some consumer (Zen 4+) |
+| ARM NEON | 128-bit | `veor`, `vcnt` | All Apple Silicon, most ARM64 |
+| ARM SVE2 | 128-2048-bit | Scalable vector ops | Server ARM (Graviton 3+) |
+
+**Important insight**: SIMD doesn't care whether your integers are 32-bit or 64-bit. XOR on a 256-bit register is just XOR on 256 bits — the "integer width" is a software abstraction, not a hardware one.
+
+The reason 64-bit Roaring is slower isn't SIMD — it's the **data structure overhead**. The `Treemap` must:
+1. Align partitions between two bitmaps before intersecting
+2. Handle missing partitions (one bitmap has partition 3, the other doesn't)
+3. Iterate a `BTreeMap` which is pointer-heavy and cache-unfriendly
+
+If all your IDs fall in the same partition (which they do with monotonic assignment), 64-bit Roaring is just 32-bit Roaring with an unnecessary wrapper.
+
+### What if we want to bitmap chunks in future?
+
+This is the real architectural question. Right now:
+- **Bitmaps index `DocId`** (file-level) — "which files have tag X?"
+- **Chunks are registry metadata** — resolved after bitmap intersection
+
+If we wanted chunk-level bitmaps (e.g., "which chunks are exported functions?"), we have two paths:
+
+**Path A: Chunks get their own `u32` ID in the same bitmap space**
+
+```
+Current:  doc_id 0, 1, 2, 3...         (files)
+Future:   chunk_id 0, 1, 2, 3...       (chunks, separate bitmaps)
+
+tag:work          → bitmap of doc_ids     (file-level)
+symbol:exported   → bitmap of chunk_ids   (chunk-level, separate namespace)
+```
+
+This works if we keep the bitmap namespaces separate — file-level bitmaps hold `DocId`, code-level bitmaps hold `ChunkId`. The query engine knows which namespace it's operating in. **No `u64` needed** — each namespace gets its own `u32` space (4.29B files + 4.29B chunks).
+
+The query becomes a two-stage resolve:
+```
+1. Intersect file-level bitmaps → matching DocIds
+2. Intersect chunk-level bitmaps → matching ChunkIds
+3. Join: chunk.doc_id IN matching_doc_ids AND chunk_id IN matching_chunk_ids
+```
+
+**Path B: Unified ID space (doc + chunk in one bitmap)**
+
+You'd need to fit both files and chunks into the same `u32` space. With monotonic IDs this is fine capacity-wise, but it means a single bitmap like `tag:work` would contain a mix of doc_ids and chunk_ids — which is semantically messy.
+
+**Recommendation: Path A** — separate namespaces, both `u32`. Clean, no capacity concern, no `u64` needed.
+
+### The chunk schema is too document-centric
+
+You're right. The current `Chunk` model assumes "a byte range inside a text file with a heading":
+
+```rust
+// Current — Obsidian-biased
+pub struct Chunk {
+    pub byte_range: Range<usize>,
+    pub heading: Option<String>,
+    pub depth: u8,
+}
+```
+
+This doesn't capture code concepts. A code chunk needs:
+- Function/class/module name
+- Symbol kind (function, class, method, constant, import block)
+- Visibility (public/private/exported)
+- Language
+- Signature (for functions — params + return type, without body)
+
+We need a more general chunk model. Here's a proposed redesign:
+
+```rust
+/// A chunk boundary identified by the parser.
+/// Flexible enough for both documents and code.
+#[derive(Debug, Clone)]
+pub struct Chunk {
+    /// Byte range within the source file
+    pub byte_range: Range<usize>,
+
+    /// What kind of chunk this is
+    pub kind: ChunkKind,
+
+    /// Human-readable label (heading text, function name, class name)
+    pub label: Option<String>,
+
+    /// Nesting depth (heading depth for markdown, scope depth for code)
+    pub depth: u8,
+
+    /// Structured metadata specific to the chunk kind
+    pub metadata: ChunkMetadata,
+}
+
+#[derive(Debug, Clone)]
+pub enum ChunkKind {
+    // Document chunks
+    Section,        // Markdown section under a heading
+    Frontmatter,    // YAML frontmatter block
+    Body,           // Entire document body (no headings)
+
+    // Code chunks (future)
+    Function,
+    Method,
+    Class,
+    Module,
+    Import,
+    Constant,
+}
+
+/// Kind-specific metadata. Avoids polluting every chunk
+/// with fields only relevant to one type.
+#[derive(Debug, Clone, Default)]
+pub struct ChunkMetadata {
+    /// For code: function signature, class declaration line
+    pub signature: Option<String>,
+    /// For code: language identifier
+    pub language: Option<String>,
+    /// For code: visibility/export status
+    pub visibility: Option<Visibility>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Visibility {
+    Public,
+    Private,
+    Internal, // e.g., pub(crate) in Rust
+}
+```
+
+This means the `MarkdownParser` produces `ChunkKind::Section` chunks with no code metadata, and a future `CodeParser` produces `ChunkKind::Function` chunks with signature/visibility filled in. The ingestion pipeline and registry handle both uniformly.
+
+The registry schema would also need updating:
+
+```mermaid
+erDiagram
+    CHUNKS {
+        u32 chunk_id PK
+        u32 doc_id FK
+        u32 byte_start
+        u32 byte_end
+        string kind "section | function | class | ..."
+        string label "heading text or symbol name"
+        u8 depth
+        string signature "nullable — for code chunks"
+        string language "nullable — for code chunks"
+        string visibility "nullable — public | private | internal"
+    }
+```
+
+The nullable code fields add no overhead for Obsidian chunks (DuckDB handles NULLs efficiently in columnar storage). But when code indexing arrives, the schema is ready without migration.
+
+### Impact on bitmap-level chunk indexing (future)
+
+If we adopt Path A (separate chunk bitmap namespace), adding chunk-level bitmaps later would require:
+
+| Change | Scope |
+|--------|-------|
+| New bitmap namespace prefix (e.g., `chunk:symbol:exported`) | Bitmap Store — key convention only |
+| ChunkId tracked in bitmaps | Ingestion — code parser inserts chunk_ids into chunk-level bitmaps |
+| Query engine supports two-stage resolve | Query Engine — new query mode |
+| Registry stores chunk-level bitmap catalog entries | Registry — new category in bitmap catalog |
+
+This is **additive** — no existing file-level bitmaps or queries change. The query engine gains a new code path for chunk-level filtering, but the structural bitmap (tag/folder/link) path stays identical.
+
+**Not a big rearchitecture.** The main prerequisite is getting the `Chunk` model right now (which this redesign does) so we don't need to migrate data later.
+
+### Recommendation
+
+**Use `u32` for both `DocId` and `ChunkId`. Don't make it configurable.**
+
+Reasoning:
+1. Capacity is not a concern — 4.29B documents is orders of magnitude beyond any personal or even enterprise use case
+2. Roaring Bitmaps are natively 32-bit — no wrapper overhead, full SIMD, standard portable format
+3. Bitmaps only index `DocId` (files), not `ChunkId` (sections/functions) — so the relevant space is even smaller
+4. If somehow `u32` is exhausted in the future, it's a breaking migration anyway — generic `IdWidth` wouldn't save you from re-indexing
+5. Simpler code, simpler contracts, fewer generics to thread through
+
+If we ever hit a scale where `u32` doc IDs aren't enough, the architecture has bigger problems (DuckDB, LMDB, single-machine limits) and would need a fundamentally different design.
+
+### What about ID recycling?
+
+With tombstone-based deletes, IDs are never reused — they accumulate. Over a very long period with high churn:
+
+| Scenario | New files/day | Days to exhaust u32 |
+|----------|--------------|-------------------|
+| Active vault | 10 | 1.17 million days (~3,200 years) |
+| Heavy code churn | 1,000 | 11,700 days (~32 years) |
+| CI/CD extreme | 100,000 | 117 days |
+
+The CI/CD extreme is unrealistic for a local tool. But the compaction job (which reclaims tombstoned IDs) would reset the counter anyway — after compaction, IDs can be reassigned.
+
+---
+
+## 10. Phase 1 Module Build Sequence (Proposed)
 
 ```mermaid
 gantt
