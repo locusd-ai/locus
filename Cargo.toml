@@ -45,7 +45,7 @@ roaring = "0.10"
 blake3 = "1"
 
 # Storage — will be needed by implementations
-# duckdb = "1"
+duckdb = { version = "1", features = ["bundled"] }
 heed = "0.20"
 
 # Testing

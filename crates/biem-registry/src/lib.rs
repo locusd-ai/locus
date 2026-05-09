@@ -3,4 +3,4 @@
 pub use biem_core::{Registry, RegistryError};
 
 pub mod memory;
-// TODO: pub mod duckdb;
+pub mod duckdb;
