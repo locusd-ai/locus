@@ -1,0 +1,64 @@
+# BIEM — Copilot Instructions
+
+## Project overview
+
+BIEM (Bit-Indexed External Memory) is a local-first indexing and retrieval engine. Core goal: **minimise context pollution for LLMs** by returning precise structural pointers (not content) via bitmap pre-filtering.
+
+- Language: **Rust**
+- Architecture docs: `docs/architecture/001-system-overview.md`, `002-roadmap.md`, `003-contracts.md`
+- Phase 1 scope: Obsidian vault indexing (markdown only)
+
+## Architecture at a glance
+
+- **Two binaries**: `biem` (CLI) and `biemd` (daemon with watcher/ingestion + optional MCP/HTTP)
+- **9 crates**: `biem-core`, `biem-parser`, `biem-registry`, `biem-bitmap`, `biem-ingest`, `biem-watcher`, `biem-query`, `biem-cli`, `biem-daemon`
+- **Trait objects** (`Box<dyn Trait>`) for pluggability — not generics
+- **Sync core**, async only at interface boundary (tokio for MCP/HTTP, `spawn_blocking` into sync)
+- **Registry** is pluggable (DuckDB first). **BitmapStore** is pluggable (LMDB/heed first, in-memory for tests)
+- IDs: `u32` for both `DocId` and `ChunkId` — not configurable
+- Bitmaps index `DocId` only; chunks resolved via registry lookup
+
+## Ways of working
+
+### Documentation first
+- Architecture decisions are documented before implementation
+- Changes to contracts or schemas must be reflected in **both** `001-system-overview.md` and `003-contracts.md` — keep them aligned
+- When making a decision, record it with rationale and alternatives considered
+
+### Diagrams
+- Use Mermaid for all diagrams (class, ER, sequence, flowchart, gantt)
+- After editing types/schemas, check that diagrams in both docs still match the code definitions
+
+### Git conventions
+- **Conventional commits**: `type(scope): description`
+  - Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`
+  - Scopes: `arch`, `core`, `parser`, `registry`, `bitmap`, `ingest`, `watcher`, `query`, `cli`, `daemon`
+  - Examples: `docs(arch): add system overview`, `feat(registry): implement DuckDB CRUD`, `test(bitmap): add LMDB round-trip tests`
+- Commit frequently at logical checkpoints
+- Keep commits atomic — one concern per commit
+
+### Code style (Rust)
+- Per-module error enums with `thiserror` — no `anyhow` in library crates (`anyhow` OK in binaries)
+- Structured logging via `tracing` (`info!`, `warn!`, `instrument`)
+- `#[from]` for error conversions across module boundaries
+- Parsers are pure functions — no I/O, no state, content provided as `&[u8]`
+- Chunk model uses `ChunkKind` + `ChunkMetadata` (not heading/depth only) — supports both document and code chunks
+
+### Testing
+- In-memory implementations of `Registry` and `BitmapStore` for unit tests
+- Integration tests use fixture vault files in `tests/fixtures/`
+- Test against the trait interface, not the concrete implementation
+
+### Communication style
+- The user has Scala experience, not deep Rust expertise — explain Rust-specific concepts with Scala parallels where helpful
+- Be direct and concise — present options with trade-offs, give a recommendation, let the user decide
+- When exploring a question, structure as: context → options → analysis → recommendation
+- Don't over-ask — gather context, propose, execute
+- If something is a small decision, just make it and note it; escalate only genuinely ambiguous choices
+
+### What not to do
+- Don't use generics for trait boundaries in v1 (trait objects instead)
+- Don't wrap sync storage in async — use `spawn_blocking` at the boundary
+- Don't store BIEM state inside the vault by default (global `~/.biem/` is default)
+- Don't put content in query responses — BIEM returns pointers, not content
+- Don't use `u64` for IDs
