@@ -129,8 +129,10 @@ classDiagram
 
     class Chunk {
         +byte_range: Range
-        +heading: Option~String~
+        +kind: ChunkKind
+        +label: Option~String~
         +depth: u8
+        +metadata: ChunkMetadata
     }
 
     class MarkdownParser {
@@ -178,8 +180,12 @@ erDiagram
         u32 doc_id FK
         u32 byte_start
         u32 byte_end
-        string heading
-        u8 heading_depth
+        string kind "section | function | class | ..."
+        string label "heading text or symbol name"
+        u8 depth
+        string signature "nullable — for code chunks"
+        string language "nullable — for code chunks"
+        string visibility "nullable — public | private | internal"
     }
 
     BITMAP_CATALOG {
@@ -280,7 +286,7 @@ MatchPointer {
     doc_id: u32,
     file_path: String,
     source_type: "obsidian",
-    chunk: Option<{ byte_start, byte_end, heading }>,
+    chunks: [{ chunk_id, kind, byte_start, byte_end, label }],
     matched_filters: ["tag:work", "type:task"],
     auto_type: "task",
     score: Option<f32>,          // future: semantic score

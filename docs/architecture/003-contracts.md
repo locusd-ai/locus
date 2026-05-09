@@ -189,7 +189,7 @@ The ingestion pipeline holds a `Vec<Box<dyn Parser>>` (the "parser registry") an
 
 ## 3. Registry Contract
 
-The registry owns the DuckDB database. All access goes through this trait.
+The registry is a pluggable storage backend. All access goes through this trait. DuckDB is the first implementation.
 
 ```rust
 /// A document record in the registry.
@@ -701,9 +701,8 @@ biem/
 │   ├── biem-ingest/        # IngestionPipeline
 │   ├── biem-watcher/       # SourceFeed trait + FsWatcher
 │   ├── biem-query/         # QueryEngine
-│   ├── biem-cli/           # CLI binary
-│   ├── biem-mcp/           # MCP server binary
-│   └── biem-http/          # HTTP API binary (or combined with mcp)
+│   ├── biem-cli/           # `biem` binary
+│   └── biem-daemon/        # `biemd` binary (watcher + optional MCP/HTTP)
 ├── docs/
 │   └── architecture/
 └── tests/                  # Integration tests
