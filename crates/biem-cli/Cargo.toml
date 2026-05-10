@@ -11,7 +11,12 @@ path = "src/main.rs"
 [dependencies]
 biem-core = { workspace = true }
 biem-query = { workspace = true }
+biem-bitmap = { workspace = true }
+biem-registry = { workspace = true }
+biem-ingest = { workspace = true }
+biem-parser = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }

@@ -81,6 +81,11 @@ impl IngestionPipeline {
         }
     }
 
+    /// Decompose the pipeline into its owned parts for handoff (e.g. to a query engine).
+    pub fn into_parts(self) -> (Vec<Box<dyn Parser>>, Box<dyn Registry>, Box<dyn BitmapStore>) {
+        (self.parsers, self.registry, self.bitmap_store)
+    }
+
     /// Find the first parser that can handle the given path.
     fn find_parser(&self, path: &Path) -> Option<&dyn Parser> {
         self.parsers.iter().find_map(|p| {
