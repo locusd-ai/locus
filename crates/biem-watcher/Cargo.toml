@@ -6,5 +6,11 @@ edition.workspace = true
 
 [dependencies]
 biem-core = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+globset = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

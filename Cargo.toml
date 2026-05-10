@@ -57,3 +57,8 @@ clap = { version = "4", features = ["derive"] }
 
 # Async runtime (daemon only)
 tokio = { version = "1", features = ["full"] }
+
+# Filesystem watching
+notify = "8"
+notify-debouncer-mini = "0.6"
+globset = "0.4"
