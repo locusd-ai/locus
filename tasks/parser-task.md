@@ -1,4 +1,4 @@
-# Task: Implement biem-parser (Markdown)
+# Task: Implement biem-parser (Markdown) ✅
 
 ## Goal
 Implement the `Parser` trait from `biem-core` with a `MarkdownParser` that extracts chunks, tags, links, frontmatter, and auto-type from Obsidian-flavour markdown files. Pure function — no I/O, no state.

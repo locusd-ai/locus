@@ -20,6 +20,13 @@ BIEM (Bit-Indexed External Memory) is a local-first indexing and retrieval engin
 
 ## Ways of working
 
+### Task-driven development
+- Every feature starts with a task file in `tasks/<crate>-task.md`
+- Tasks define the goal, break work into steps with validation criteria, and list the expected commit(s)
+- Steps are checked off as completed — the task file is the source of truth for progress
+- Before starting work, check for an existing task; if none exists, create one
+- After completing a feature, mark all steps done and add ✅ to the title
+
 ### Documentation first
 - Architecture decisions are documented before implementation
 - Changes to contracts or schemas must be reflected in **both** `001-system-overview.md` and `003-contracts.md` — keep them aligned

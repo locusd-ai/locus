@@ -1,4 +1,4 @@
-# Task: Implement biem-ingest (Ingestion Pipeline)
+# Task: Implement biem-ingest (Ingestion Pipeline) ✅
 
 ## Goal
 Implement the `IngestionPipeline` as a concrete coordinator that connects parsers, registry, and bitmap store. Handles both incremental (single event) and bulk (full directory) indexing.

@@ -1,4 +1,4 @@
-# Task: Implement biem-query (Query Engine)
+# Task: Implement biem-query (Query Engine) ✅
 
 ## Goal
 Implement the `QueryEngine` trait and `BitmapQueryEngine` struct that resolves boolean filter expressions against the bitmap store, then hydrates results with metadata from the registry. Returns pointers (not content).
