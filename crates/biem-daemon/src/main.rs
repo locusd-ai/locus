@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -11,9 +11,14 @@ use biem_bitmap::memory::InMemoryBitmapStore;
 use biem_core::types::ChangeEvent;
 use biem_ingest::IngestionPipeline;
 use biem_parser::markdown::MarkdownParser;
+use biem_query::BitmapQueryEngine;
 use biem_registry::duckdb::DuckDbRegistry;
 use biem_registry::memory::InMemoryRegistry;
 use biem_watcher::{FsWatcher, FsWatcherConfig, SourceFeed};
+use rmcp::ServiceExt;
+
+mod http;
+mod mcp;
 
 #[derive(Parser)]
 #[command(name = "biemd", about = "BIEM daemon — watcher, ingestion, and query server")]
@@ -36,6 +41,18 @@ struct Cli {
     /// Perform an initial bulk index before watching
     #[arg(long, default_value = "true")]
     initial_index: bool,
+
+    /// Run as MCP server over stdio (no watcher)
+    #[arg(long)]
+    mcp: bool,
+
+    /// Run HTTP API server
+    #[arg(long)]
+    http: bool,
+
+    /// HTTP API port (default: 3141)
+    #[arg(long, default_value = "3141")]
+    port: u16,
 }
 
 #[tokio::main]
@@ -76,6 +93,87 @@ async fn main() -> Result<()> {
 
         (Box::new(registry), Box::new(bitmap_store))
     };
+
+    if cli.mcp || cli.http {
+        if cli.memory {
+            anyhow::bail!("MCP/HTTP mode requires persistent storage (--memory not supported)");
+        }
+
+        // Use the first set of stores for initial indexing
+        if cli.initial_index {
+            info!("performing initial bulk index");
+            let mut pipeline = IngestionPipeline::new(
+                vec![Box::new(MarkdownParser)],
+                registry,
+                bitmap_store,
+            );
+            let result = pipeline.bulk_index(&vault)
+                .context("initial bulk index failed")?;
+            info!(
+                docs = result.docs_indexed,
+                bitmaps = result.bitmaps_created,
+                ms = result.duration_ms,
+                "initial index complete"
+            );
+        }
+
+        // Open fresh handles for the query engine
+        let data_dir = if let Some(ref dir) = cli.data_dir {
+            dir.clone()
+        } else {
+            let home = std::env::var("HOME").context("HOME not set")?;
+            PathBuf::from(home).join(".biem")
+        };
+        let db_path = data_dir.join("registry.duckdb");
+        let lmdb_path = data_dir.join("bitmaps.lmdb");
+
+        let qe_registry: Box<dyn biem_core::registry::Registry> = Box::new(
+            DuckDbRegistry::new(db_path.to_str().unwrap()).context("failed to open DuckDB for query engine")?
+        );
+        let qe_bitmap: Box<dyn biem_core::bitmap::BitmapStore> = Box::new(
+            LmdbBitmapStore::new(&lmdb_path).context("failed to open LMDB for query engine")?
+        );
+        let engine: Arc<dyn biem_core::query::QueryEngine> = Arc::new(
+            BitmapQueryEngine::new(qe_bitmap, qe_registry),
+        );
+
+        // Launch HTTP server (background task if also running MCP)
+        if cli.http {
+            let addr = format!("0.0.0.0:{}", cli.port);
+            let app = http::router(engine.clone());
+            let listener = tokio::net::TcpListener::bind(&addr).await
+                .with_context(|| format!("failed to bind HTTP on {addr}"))?;
+            info!(addr = %addr, "starting HTTP API server");
+
+            if cli.mcp {
+                // Run HTTP in background, MCP in foreground
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(listener, app).await {
+                        error!("HTTP server error: {e}");
+                    }
+                });
+            } else {
+                // HTTP-only mode: block on it
+                info!("HTTP-only mode — press Ctrl+C to stop");
+                axum::serve(listener, app).await
+                    .context("HTTP server error")?;
+                return Ok(());
+            }
+        }
+
+        if cli.mcp {
+            let server = mcp::BiemMcpServer::new(engine);
+            info!("starting MCP server over stdio");
+            let transport = rmcp::transport::io::stdio();
+            let service = server.serve(transport).await
+                .context("MCP server failed to start")?;
+            service.waiting().await
+                .map_err(|e| anyhow::anyhow!("MCP service error: {e}"))?;
+            info!("MCP server stopped");
+        }
+
+        return Ok(());
+    }
 
     let mut pipeline = IngestionPipeline::new(
         vec![Box::new(MarkdownParser)],
