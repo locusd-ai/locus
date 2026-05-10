@@ -38,7 +38,7 @@ struct Cli {
     #[arg(long, default_value = "500")]
     debounce_ms: u64,
 
-    /// Perform an initial bulk index before watching
+    /// Perform an initial bulk index before watching (skipped if already indexed)
     #[arg(long, default_value = "true")]
     initial_index: bool,
 
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
 
     // Build stores
     let data_dir_resolved = resolve_daemon_data_dir(&cli, &vault)?;
-    let (registry, bitmap_store): (Box<dyn biem_core::registry::Registry>, Box<dyn biem_core::bitmap::BitmapStore>) = if cli.memory {
+    let (mut registry, mut bitmap_store): (Box<dyn biem_core::registry::Registry>, Box<dyn biem_core::bitmap::BitmapStore>) = if cli.memory {
         info!("using in-memory storage");
         (Box::new(InMemoryRegistry::new()), Box::new(InMemoryBitmapStore::new()))
     } else {
@@ -97,20 +97,26 @@ async fn main() -> Result<()> {
 
         // Use the first set of stores for initial indexing
         if cli.initial_index {
-            info!("performing initial bulk index");
-            let mut pipeline = IngestionPipeline::new(
-                vec![Box::new(MarkdownParser)],
-                registry,
-                bitmap_store,
-            );
-            let result = pipeline.bulk_index(&vault)
-                .context("initial bulk index failed")?;
-            info!(
-                docs = result.docs_indexed,
-                bitmaps = result.bitmaps_created,
-                ms = result.duration_ms,
-                "initial index complete"
-            );
+            let state = registry.get_global_state();
+            let already_indexed = state.map(|s| s.total_documents > 0).unwrap_or(false);
+            if already_indexed {
+                info!("vault already indexed, skipping initial bulk index");
+            } else {
+                info!("performing initial bulk index");
+                let mut pipeline = IngestionPipeline::new(
+                    vec![Box::new(MarkdownParser)],
+                    registry,
+                    bitmap_store,
+                );
+                let result = pipeline.bulk_index(&vault)
+                    .context("initial bulk index failed")?;
+                info!(
+                    docs = result.docs_indexed,
+                    bitmaps = result.bitmaps_created,
+                    ms = result.duration_ms,
+                    "initial index complete"
+                );
+            }
         }
 
         // Open fresh handles for the query engine
@@ -166,24 +172,38 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Initial bulk index (watcher mode)
+    if cli.initial_index {
+        let state = registry.get_global_state();
+        let already_indexed = state.map(|s| s.total_documents > 0).unwrap_or(false);
+        if already_indexed {
+            info!("vault already indexed, skipping initial bulk index");
+        } else {
+            let mut pipeline = IngestionPipeline::new(
+                vec![Box::new(MarkdownParser)],
+                registry,
+                bitmap_store,
+            );
+            info!("performing initial bulk index");
+            let result = pipeline.bulk_index(&vault)
+                .context("initial bulk index failed")?;
+            info!(
+                docs = result.docs_indexed,
+                bitmaps = result.bitmaps_created,
+                ms = result.duration_ms,
+                "initial index complete"
+            );
+            let (_, r, b) = pipeline.into_parts();
+            registry = r;
+            bitmap_store = b;
+        }
+    }
+
     let mut pipeline = IngestionPipeline::new(
         vec![Box::new(MarkdownParser)],
         registry,
         bitmap_store,
     );
-
-    // Initial bulk index
-    if cli.initial_index {
-        info!("performing initial bulk index");
-        let result = pipeline.bulk_index(&vault)
-            .context("initial bulk index failed")?;
-        info!(
-            docs = result.docs_indexed,
-            bitmaps = result.bitmaps_created,
-            ms = result.duration_ms,
-            "initial index complete"
-        );
-    }
 
     // Set up watcher
     let config = FsWatcherConfig {

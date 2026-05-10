@@ -120,8 +120,13 @@ fn resolve_data_dir(cli: &Cli) -> Result<PathBuf> {
     if let Some(ref dir) = cli.data_dir {
         return Ok(dir.clone());
     }
-    // No override — fall back to legacy default ~/.biem/
-    // (will be replaced by config-based resolution once vaults are registered)
+    // Try config: if exactly one vault registered, use it
+    let cfg = config::load_config().unwrap_or_default();
+    if cfg.vaults.len() == 1 {
+        let entry = cfg.vaults.values().next().unwrap();
+        return Ok(entry.data_dir.clone());
+    }
+    // Fall back to legacy default ~/.biem/
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".biem"))
 }
