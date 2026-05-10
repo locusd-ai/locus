@@ -36,6 +36,9 @@ impl Parser for MarkdownParser {
             }
         }
 
+        // Flatten hierarchical tags: "a/b/c" → ["a", "a/b", "a/b/c"]
+        let tags = flatten_hierarchical_tags(tags);
+
         let auto_type = detect_auto_type(text, &links, &frontmatter);
 
         Ok(ParseResult {
@@ -411,6 +414,30 @@ fn extract_inline_tags(content: &str) -> Vec<String> {
     tags
 }
 
+/// Flatten hierarchical tags into all prefix segments.
+/// e.g. `["work/project/alpha", "personal"]` → `["work", "work/project", "work/project/alpha", "personal"]`
+fn flatten_hierarchical_tags(tags: Vec<String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for tag in tags {
+        if tag.contains('/') {
+            let parts: Vec<&str> = tag.split('/').collect();
+            let mut prefix = String::new();
+            for (i, part) in parts.iter().enumerate() {
+                if i > 0 {
+                    prefix.push('/');
+                }
+                prefix.push_str(part);
+                if !result.contains(&prefix) {
+                    result.push(prefix.clone());
+                }
+            }
+        } else if !result.contains(&tag) {
+            result.push(tag);
+        }
+    }
+    result
+}
+
 // ── Auto-type detection ──────────────────────────────────────────
 
 /// Detect the note type based on content heuristics.
@@ -713,5 +740,47 @@ mod tests {
         let content = &[0xFF, 0xFE, 0x00];
         let result = p.parse(Path::new("test.md"), content);
         assert!(matches!(result, Err(ParseError::InvalidUtf8)));
+    }
+
+    // ── Hierarchical tag flattening ──────────────────────────────
+
+    #[test]
+    fn flatten_hierarchical_simple() {
+        let tags = vec!["work/project/alpha".to_string()];
+        let flat = flatten_hierarchical_tags(tags);
+        assert_eq!(flat, vec!["work", "work/project", "work/project/alpha"]);
+    }
+
+    #[test]
+    fn flatten_hierarchical_mixed() {
+        let tags = vec!["work/project".to_string(), "personal".to_string()];
+        let flat = flatten_hierarchical_tags(tags);
+        assert_eq!(flat, vec!["work", "work/project", "personal"]);
+    }
+
+    #[test]
+    fn flatten_hierarchical_no_slash() {
+        let tags = vec!["simple".to_string()];
+        let flat = flatten_hierarchical_tags(tags);
+        assert_eq!(flat, vec!["simple"]);
+    }
+
+    #[test]
+    fn flatten_hierarchical_dedup() {
+        let tags = vec!["a/b".to_string(), "a/c".to_string()];
+        let flat = flatten_hierarchical_tags(tags);
+        assert_eq!(flat, vec!["a", "a/b", "a/c"]);
+    }
+
+    #[test]
+    fn parser_flattens_hierarchical_tags() {
+        let p = MarkdownParser;
+        let content = b"---\ntags:\n  - work/project/alpha\n---\n# Note\n#personal/finance\n";
+        let result = p.parse(Path::new("test.md"), content).unwrap();
+        assert!(result.tags.contains(&"work".to_string()));
+        assert!(result.tags.contains(&"work/project".to_string()));
+        assert!(result.tags.contains(&"work/project/alpha".to_string()));
+        assert!(result.tags.contains(&"personal".to_string()));
+        assert!(result.tags.contains(&"personal/finance".to_string()));
     }
 }
