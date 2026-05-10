@@ -4,11 +4,15 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use biem_bitmap::lmdb::LmdbBitmapStore;
 use biem_bitmap::memory::InMemoryBitmapStore;
+use biem_core::bitmap::BitmapStore;
 use biem_core::query::{Filter, QueryEngine, QueryRequest};
+use biem_core::registry::Registry;
 use biem_ingest::IngestionPipeline;
 use biem_parser::markdown::MarkdownParser;
 use biem_query::BitmapQueryEngine;
+use biem_registry::duckdb::DuckDbRegistry;
 use biem_registry::memory::InMemoryRegistry;
 
 #[derive(Parser)]
@@ -16,11 +20,19 @@ use biem_registry::memory::InMemoryRegistry;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Data directory for persistent storage (default: ~/.biem)
+    #[arg(long, global = true)]
+    data_dir: Option<PathBuf>,
+
+    /// Use in-memory storage instead of persistent (no data dir needed)
+    #[arg(long, global = true, default_value = "false")]
+    memory: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Index a vault directory (standalone, in-memory)
+    /// Index a vault directory
     Index {
         /// Path to the vault directory
         path: PathBuf,
@@ -32,32 +44,32 @@ enum Commands {
         /// Maximum results
         #[arg(long, default_value = "20")]
         limit: u32,
-        /// Path to the vault to search
+        /// Path to the vault to search (only needed with --memory)
         #[arg(long)]
-        vault: PathBuf,
+        vault: Option<PathBuf>,
     },
     /// Inspect a specific file's index entry
     Inspect {
         /// Path to the file to inspect
         path: PathBuf,
-        /// Path to the vault
+        /// Path to the vault (only needed with --memory)
         #[arg(long)]
-        vault: PathBuf,
+        vault: Option<PathBuf>,
     },
     /// Show index status
     Status {
-        /// Path to the vault
+        /// Path to the vault (only needed with --memory)
         #[arg(long)]
-        vault: PathBuf,
+        vault: Option<PathBuf>,
     },
     /// List available filters (bitmap keys)
     Filters {
         /// Filter by category: tag, folder, link, type, source
         #[arg(long)]
         category: Option<String>,
-        /// Path to the vault
+        /// Path to the vault (only needed with --memory)
         #[arg(long)]
-        vault: PathBuf,
+        vault: Option<PathBuf>,
     },
 }
 
@@ -69,35 +81,96 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Index { path } => cmd_index(&path),
-        Commands::Search { filters, limit, vault } => cmd_search(&vault, &filters, limit),
-        Commands::Inspect { path, vault } => cmd_inspect(&vault, &path),
-        Commands::Status { vault } => cmd_status(&vault),
-        Commands::Filters { category, vault } => cmd_filters(&vault, category),
+        Commands::Index { ref path } => cmd_index(path, &cli),
+        Commands::Search { ref filters, limit, ref vault } => cmd_search(vault.as_ref(), filters, limit, &cli),
+        Commands::Inspect { ref path, ref vault } => cmd_inspect(vault.as_ref(), path, &cli),
+        Commands::Status { ref vault } => cmd_status(vault.as_ref(), &cli),
+        Commands::Filters { ref category, ref vault } => cmd_filters(vault.as_ref(), category.clone(), &cli),
     }
 }
 
-/// Index and return engine only.
-fn index_to_engine(vault: &PathBuf) -> Result<BitmapQueryEngine> {
-    let mut pipeline = IngestionPipeline::new(
-        vec![Box::new(MarkdownParser)],
-        Box::new(InMemoryRegistry::new()),
-        Box::new(InMemoryBitmapStore::new()),
-    );
+// ── Storage helpers ──────────────────────────────────────────────
 
-    pipeline.bulk_index(vault.as_path()).context("failed to index vault")?;
+fn resolve_data_dir(cli: &Cli) -> Result<PathBuf> {
+    if let Some(ref dir) = cli.data_dir {
+        Ok(dir.clone())
+    } else {
+        let home = std::env::var("HOME").context("HOME not set")?;
+        Ok(PathBuf::from(home).join(".biem"))
+    }
+}
 
-    let (_parsers, registry, bitmap_store) = pipeline.into_parts();
-    Ok(BitmapQueryEngine::new(bitmap_store, registry))
+fn ensure_data_dir(cli: &Cli) -> Result<PathBuf> {
+    let dir = resolve_data_dir(cli)?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create data dir: {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Create persistent stores (DuckDB + LMDB).
+fn open_persistent_stores(data_dir: &PathBuf) -> Result<(Box<dyn Registry>, Box<dyn BitmapStore>)> {
+    let db_path = data_dir.join("registry.duckdb");
+    let registry = DuckDbRegistry::new(db_path.to_str().unwrap())
+        .context("failed to open DuckDB registry")?;
+
+    let lmdb_path = data_dir.join("bitmaps.lmdb");
+    let bitmap_store = LmdbBitmapStore::new(&lmdb_path)
+        .context("failed to open LMDB bitmap store")?;
+
+    Ok((Box::new(registry), Box::new(bitmap_store)))
+}
+
+/// Create in-memory stores.
+fn open_memory_stores() -> (Box<dyn Registry>, Box<dyn BitmapStore>) {
+    (Box::new(InMemoryRegistry::new()), Box::new(InMemoryBitmapStore::new()))
+}
+
+/// Build a pipeline with the appropriate backend, optionally indexing a vault.
+fn build_pipeline_and_index(
+    vault: Option<&PathBuf>,
+    cli: &Cli,
+) -> Result<(Box<dyn Registry>, Box<dyn BitmapStore>)> {
+    let (registry, bitmap_store) = if cli.memory {
+        let (r, b) = open_memory_stores();
+        // In-memory mode: must index on the fly
+        let vault = vault.context("--vault is required with --memory mode")?;
+        let mut pipeline = IngestionPipeline::new(
+            vec![Box::new(MarkdownParser)],
+            r,
+            b,
+        );
+        pipeline.bulk_index(vault.as_path()).context("failed to index vault")?;
+        let (_parsers, registry, bitmap_store) = pipeline.into_parts();
+        (registry, bitmap_store)
+    } else {
+        // Persistent mode: stores already have data from previous `biem index`
+        let data_dir = resolve_data_dir(cli)?;
+        if !data_dir.exists() {
+            anyhow::bail!(
+                "data dir {} does not exist — run `biem index <vault>` first, or use --memory",
+                data_dir.display()
+            );
+        }
+        open_persistent_stores(&data_dir)?
+    };
+    Ok((registry, bitmap_store))
 }
 
 // ── Commands ─────────────────────────────────────────────────────
 
-fn cmd_index(path: &PathBuf) -> Result<()> {
+fn cmd_index(path: &PathBuf, cli: &Cli) -> Result<()> {
+    let (registry, bitmap_store) = if cli.memory {
+        open_memory_stores()
+    } else {
+        let data_dir = ensure_data_dir(cli)?;
+        eprintln!("Data dir: {}", data_dir.display());
+        open_persistent_stores(&data_dir)?
+    };
+
     let mut pipeline = IngestionPipeline::new(
         vec![Box::new(MarkdownParser)],
-        Box::new(InMemoryRegistry::new()),
-        Box::new(InMemoryBitmapStore::new()),
+        registry,
+        bitmap_store,
     );
 
     let result = pipeline.bulk_index(path.as_path())
@@ -106,16 +179,22 @@ fn cmd_index(path: &PathBuf) -> Result<()> {
     println!("✓ Indexed {} documents", result.docs_indexed);
     println!("  {} bitmap keys created", result.bitmaps_created);
     println!("  {}ms elapsed", result.duration_ms);
+
+    if !cli.memory {
+        let data_dir = resolve_data_dir(cli)?;
+        println!("  stored in {}", data_dir.display());
+    }
+
     Ok(())
 }
 
-fn cmd_search(vault: &PathBuf, filter_keys: &[String], limit: u32) -> Result<()> {
-    let engine = index_to_engine(vault)?;
+fn cmd_search(vault: Option<&PathBuf>, filter_keys: &[String], limit: u32, cli: &Cli) -> Result<()> {
+    let (registry, bitmap_store) = build_pipeline_and_index(vault, cli)?;
+    let engine = BitmapQueryEngine::new(bitmap_store, registry);
 
     let filter = if filter_keys.len() == 1 {
         Filter::Key(filter_keys[0].clone())
     } else if filter_keys.is_empty() {
-        // Match everything — use source:obsidian as universe
         Filter::Key("source:obsidian".into())
     } else {
         Filter::And(filter_keys.iter().map(|k| Filter::Key(k.clone())).collect())
@@ -142,10 +221,7 @@ fn cmd_search(vault: &PathBuf, filter_keys: &[String], limit: u32) -> Result<()>
         for c in &m.chunks {
             println!(
                 "    chunk {} ({}) bytes {}..{} {}",
-                c.chunk_id,
-                c.kind,
-                c.byte_start,
-                c.byte_end,
+                c.chunk_id, c.kind, c.byte_start, c.byte_end,
                 c.label.as_deref().unwrap_or("")
             );
         }
@@ -154,17 +230,9 @@ fn cmd_search(vault: &PathBuf, filter_keys: &[String], limit: u32) -> Result<()>
     Ok(())
 }
 
-fn cmd_inspect(vault: &PathBuf, path: &PathBuf) -> Result<()> {
-    let mut pipeline = IngestionPipeline::new(
-        vec![Box::new(MarkdownParser)],
-        Box::new(InMemoryRegistry::new()),
-        Box::new(InMemoryBitmapStore::new()),
-    );
+fn cmd_inspect(vault: Option<&PathBuf>, path: &PathBuf, cli: &Cli) -> Result<()> {
+    let (registry, bitmap_store) = build_pipeline_and_index(vault, cli)?;
 
-    pipeline.bulk_index(vault.as_path()).context("failed to index vault")?;
-    let (_parsers, registry, bitmap_store) = pipeline.into_parts();
-
-    // Try canonical path first, then as-is
     let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
     let doc = registry.lookup_by_path(&canonical)
         .context("registry lookup failed")?
@@ -190,7 +258,6 @@ fn cmd_inspect(vault: &PathBuf, path: &PathBuf) -> Result<()> {
                 );
             }
 
-            // Show which bitmaps contain this doc
             let keys = bitmap_store.list_keys(None)
                 .context("failed to list bitmap keys")?;
             let mut doc_keys = Vec::new();
@@ -211,15 +278,8 @@ fn cmd_inspect(vault: &PathBuf, path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn cmd_status(vault: &PathBuf) -> Result<()> {
-    let mut pipeline = IngestionPipeline::new(
-        vec![Box::new(MarkdownParser)],
-        Box::new(InMemoryRegistry::new()),
-        Box::new(InMemoryBitmapStore::new()),
-    );
-
-    pipeline.bulk_index(vault.as_path()).context("failed to index vault")?;
-    let (_parsers, registry, bitmap_store) = pipeline.into_parts();
+fn cmd_status(vault: Option<&PathBuf>, cli: &Cli) -> Result<()> {
+    let (registry, bitmap_store) = build_pipeline_and_index(vault, cli)?;
 
     let state = registry.get_global_state().context("failed to get state")?;
     let tombstones = bitmap_store.get_tombstone().unwrap_or_default();
@@ -235,15 +295,8 @@ fn cmd_status(vault: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn cmd_filters(vault: &PathBuf, category: Option<String>) -> Result<()> {
-    let mut pipeline = IngestionPipeline::new(
-        vec![Box::new(MarkdownParser)],
-        Box::new(InMemoryRegistry::new()),
-        Box::new(InMemoryBitmapStore::new()),
-    );
-
-    pipeline.bulk_index(vault.as_path()).context("failed to index vault")?;
-    let (_parsers, _registry, bitmap_store) = pipeline.into_parts();
+fn cmd_filters(vault: Option<&PathBuf>, category: Option<String>, cli: &Cli) -> Result<()> {
+    let (_registry, bitmap_store) = build_pipeline_and_index(vault, cli)?;
 
     let prefix = category.as_deref().map(|c| format!("{c}:"));
     let keys = bitmap_store.list_keys(prefix.as_deref())
