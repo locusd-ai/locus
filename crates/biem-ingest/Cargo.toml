@@ -10,5 +10,9 @@ biem-parser = { workspace = true }
 biem-registry = { workspace = true }
 biem-bitmap = { workspace = true }
 blake3 = { workspace = true }
+roaring = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

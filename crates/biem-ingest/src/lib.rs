@@ -1,3 +1,5 @@
 //! Ingestion pipeline — orchestrates parsers, registry, and bitmap store.
 
-// TODO: pub mod pipeline;
+mod pipeline;
+
+pub use pipeline::{BulkIndexResult, IngestAction, IngestError, IngestResult, IngestionPipeline};
