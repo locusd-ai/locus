@@ -2,4 +2,4 @@
 
 pub use biem_core::{Parser, ParseError};
 
-// TODO: pub mod markdown;
+pub mod markdown;
