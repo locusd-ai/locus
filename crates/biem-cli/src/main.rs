@@ -29,6 +29,10 @@ struct Cli {
     /// Use in-memory storage instead of persistent (no data dir needed)
     #[arg(long, global = true, default_value = "false")]
     memory: bool,
+
+    /// Output results as JSON
+    #[arg(long, global = true, default_value = "false")]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -82,6 +86,12 @@ enum Commands {
         #[arg(long)]
         vault: Option<PathBuf>,
     },
+    /// Compact: remove tombstoned documents from bitmaps and registry
+    Compact {
+        /// Path to the vault (only needed with --memory)
+        #[arg(long)]
+        vault: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -99,6 +109,7 @@ fn main() -> Result<()> {
         Commands::Inspect { ref path, ref vault } => cmd_inspect(vault.as_ref(), path, &cli),
         Commands::Status { ref vault } => cmd_status(vault.as_ref(), &cli),
         Commands::Filters { ref category, ref vault } => cmd_filters(vault.as_ref(), category.clone(), &cli),
+        Commands::Compact { ref vault } => cmd_compact(vault.as_ref(), &cli),
     }
 }
 
@@ -290,6 +301,11 @@ fn cmd_search(vault: Option<&PathBuf>, filter_keys: &[String], limit: u32, cli: 
         offset: None,
     }).context("query failed")?;
 
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
     println!("{} matches ({}μs)", result.total_matching, result.query_time_us);
     println!();
 
@@ -316,46 +332,38 @@ fn cmd_search(vault: Option<&PathBuf>, filter_keys: &[String], limit: u32, cli: 
 
 fn cmd_inspect(vault: Option<&PathBuf>, path: &PathBuf, cli: &Cli) -> Result<()> {
     let (registry, bitmap_store) = build_pipeline_and_index(vault, cli)?;
+    let engine = BitmapQueryEngine::new(bitmap_store, registry);
 
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-    let doc = registry.lookup_by_path(&canonical)
-        .context("registry lookup failed")?
-        .or(registry.lookup_by_path(path).ok().flatten());
+    let result = engine.inspect(path).context("inspect failed")?;
 
-    match doc {
-        Some(d) => {
-            println!("Document: {}", d.file_path.display());
-            println!("  doc_id:       {}", d.doc_id);
-            println!("  source:       {:?}", d.source_type);
-            println!("  auto_type:    {:?}", d.auto_type);
-            println!("  blake3:       {}", hex(&d.blake3_hash));
-            println!("  last_indexed: {}", d.last_indexed);
-
-            let chunks = registry.get_chunks(d.doc_id)
-                .context("failed to get chunks")?;
-            println!("  chunks:       {}", chunks.len());
-            for c in &chunks {
-                println!(
-                    "    [{}] {:?} bytes {}..{} {}",
-                    c.chunk_id, c.kind, c.byte_start, c.byte_end,
-                    c.label.as_deref().unwrap_or("")
-                );
-            }
-
-            let keys = bitmap_store.list_keys(None)
-                .context("failed to list bitmap keys")?;
-            let mut doc_keys = Vec::new();
-            for key in &keys {
-                let bm = bitmap_store.get(key).unwrap_or_default();
-                if bm.contains(d.doc_id) {
-                    doc_keys.push(key.clone());
+    match result {
+        Some(r) => {
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                println!("Document: {}", r.file_path.display());
+                println!("  doc_id:       {}", r.doc_id);
+                println!("  source:       {}", r.source_type);
+                println!("  auto_type:    {}", r.auto_type.as_deref().unwrap_or("none"));
+                println!("  blake3:       {}", r.blake3_hash);
+                println!("  last_indexed: {}", r.last_indexed);
+                println!("  chunks:       {}", r.chunks.len());
+                for c in &r.chunks {
+                    println!(
+                        "    [{}] {} bytes {}..{} {}",
+                        c.chunk_id, c.kind, c.byte_start, c.byte_end,
+                        c.label.as_deref().unwrap_or("")
+                    );
                 }
+                println!("  bitmaps:      {}", r.bitmap_keys.join(", "));
             }
-            doc_keys.sort();
-            println!("  bitmaps:      {}", doc_keys.join(", "));
         }
         None => {
-            println!("Not found in index: {}", path.display());
+            if cli.json {
+                println!("{}", serde_json::json!({"error": "not found", "path": path.display().to_string()}));
+            } else {
+                println!("Not found in index: {}", path.display());
+            }
         }
     }
 
@@ -364,17 +372,19 @@ fn cmd_inspect(vault: Option<&PathBuf>, path: &PathBuf, cli: &Cli) -> Result<()>
 
 fn cmd_status(vault: Option<&PathBuf>, cli: &Cli) -> Result<()> {
     let (registry, bitmap_store) = build_pipeline_and_index(vault, cli)?;
+    let engine = BitmapQueryEngine::new(bitmap_store, registry);
+    let status = engine.status().context("failed to get status")?;
 
-    let state = registry.get_global_state().context("failed to get state")?;
-    let tombstones = bitmap_store.get_tombstone().unwrap_or_default();
-    let bitmap_count = bitmap_store.list_keys(None).unwrap_or_default().len();
-
-    println!("BIEM Index Status");
-    println!("  documents:  {}", state.total_documents);
-    println!("  bitmaps:    {}", bitmap_count);
-    println!("  tombstoned: {}", tombstones.len());
-    println!("  next_doc:   {}", state.next_doc_id);
-    println!("  next_chunk: {}", state.next_chunk_id);
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+    } else {
+        println!("BIEM Index Status");
+        println!("  documents:  {}", status.total_documents);
+        println!("  bitmaps:    {}", status.total_bitmaps);
+        println!("  tombstoned: {}", status.tombstoned);
+        println!("  next_doc:   {}", status.next_doc_id);
+        println!("  next_chunk: {}", status.next_chunk_id);
+    }
 
     Ok(())
 }
@@ -386,12 +396,63 @@ fn cmd_filters(vault: Option<&PathBuf>, category: Option<String>, cli: &Cli) -> 
     let keys = bitmap_store.list_keys(prefix.as_deref())
         .context("failed to list keys")?;
 
+    if cli.json {
+        let entries: Vec<serde_json::Value> = keys.iter().map(|key| {
+            let card = bitmap_store.cardinality(key).unwrap_or(0);
+            serde_json::json!({ "key": key, "cardinality": card })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
+
     println!("{} filter keys{}:", keys.len(),
         category.as_ref().map(|c| format!(" (category: {c})")).unwrap_or_default());
 
     for key in &keys {
         let card = bitmap_store.cardinality(key).unwrap_or(0);
         println!("  {key}  ({card} docs)");
+    }
+
+    Ok(())
+}
+
+fn cmd_compact(vault: Option<&PathBuf>, cli: &Cli) -> Result<()> {
+    let (registry, bitmap_store) = if cli.memory {
+        let (r, b) = open_memory_stores();
+        if let Some(v) = vault {
+            let mut pipeline = IngestionPipeline::new(
+                vec![Box::new(MarkdownParser)],
+                r, b,
+            );
+            pipeline.bulk_index(v.as_path()).context("failed to index vault")?;
+            let (_, r, b) = pipeline.into_parts();
+            (r, b)
+        } else {
+            (r, b)
+        }
+    } else {
+        let data_dir = resolve_data_dir(cli)?;
+        if !data_dir.exists() {
+            anyhow::bail!("data dir {} does not exist — nothing to compact", data_dir.display());
+        }
+        open_persistent_stores(&data_dir)?
+    };
+
+    let mut pipeline = IngestionPipeline::new(
+        vec![Box::new(MarkdownParser)],
+        registry,
+        bitmap_store,
+    );
+
+    let result = pipeline.compact().context("compaction failed")?;
+
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("✓ Compaction complete");
+        println!("  {} documents removed", result.docs_removed);
+        println!("  {} bitmaps cleaned", result.bitmaps_cleaned);
+        println!("  {}ms elapsed", result.duration_ms);
     }
 
     Ok(())
