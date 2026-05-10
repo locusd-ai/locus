@@ -68,16 +68,12 @@ async fn main() -> Result<()> {
     info!(vault = %vault.display(), "starting biemd");
 
     // Build stores
+    let data_dir_resolved = resolve_daemon_data_dir(&cli, &vault)?;
     let (registry, bitmap_store): (Box<dyn biem_core::registry::Registry>, Box<dyn biem_core::bitmap::BitmapStore>) = if cli.memory {
         info!("using in-memory storage");
         (Box::new(InMemoryRegistry::new()), Box::new(InMemoryBitmapStore::new()))
     } else {
-        let data_dir = if let Some(ref dir) = cli.data_dir {
-            dir.clone()
-        } else {
-            let home = std::env::var("HOME").context("HOME not set")?;
-            PathBuf::from(home).join(".biem")
-        };
+        let data_dir = data_dir_resolved.clone();
         std::fs::create_dir_all(&data_dir)
             .with_context(|| format!("failed to create data dir: {}", data_dir.display()))?;
 
@@ -118,12 +114,7 @@ async fn main() -> Result<()> {
         }
 
         // Open fresh handles for the query engine
-        let data_dir = if let Some(ref dir) = cli.data_dir {
-            dir.clone()
-        } else {
-            let home = std::env::var("HOME").context("HOME not set")?;
-            PathBuf::from(home).join(".biem")
-        };
+        let data_dir = data_dir_resolved.clone();
         let db_path = data_dir.join("registry.duckdb");
         let lmdb_path = data_dir.join("bitmaps.lmdb");
 
@@ -228,6 +219,20 @@ async fn main() -> Result<()> {
 
     info!("biemd stopped");
     Ok(())
+}
+
+fn resolve_daemon_data_dir(cli: &Cli, vault: &PathBuf) -> Result<PathBuf> {
+    if let Some(ref dir) = cli.data_dir {
+        return Ok(dir.clone());
+    }
+    let cfg = biem_core::config::load_config().unwrap_or_default();
+    match biem_core::config::resolve_vault(vault, &cfg) {
+        Ok(entry) => Ok(entry.data_dir),
+        Err(_) => {
+            let home = std::env::var("HOME").context("HOME not set")?;
+            Ok(PathBuf::from(home).join(".biem"))
+        }
+    }
 }
 
 fn run_ingestion_loop(mut pipeline: IngestionPipeline, rx: mpsc::Receiver<ChangeEvent>) {

@@ -7,6 +7,7 @@ use tracing_subscriber::EnvFilter;
 use biem_bitmap::lmdb::LmdbBitmapStore;
 use biem_bitmap::memory::InMemoryBitmapStore;
 use biem_core::bitmap::BitmapStore;
+use biem_core::config::{self, StorageMode};
 use biem_core::query::{Filter, QueryEngine, QueryRequest};
 use biem_core::registry::Registry;
 use biem_ingest::IngestionPipeline;
@@ -21,7 +22,7 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Data directory for persistent storage (default: ~/.biem)
+    /// Data directory for persistent storage (overrides config resolution)
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
 
@@ -32,6 +33,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Register a vault and run initial index
+    Init {
+        /// Path to the vault directory
+        path: PathBuf,
+        /// Store state inside the vault (.biem/) instead of globally
+        #[arg(long)]
+        local: bool,
+    },
+    /// Show configuration (registered vaults)
+    Config,
     /// Index a vault directory
     Index {
         /// Path to the vault directory
@@ -81,6 +92,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Init { ref path, local } => cmd_init(path, local),
+        Commands::Config => cmd_config(),
         Commands::Index { ref path } => cmd_index(path, &cli),
         Commands::Search { ref filters, limit, ref vault } => cmd_search(vault.as_ref(), filters, limit, &cli),
         Commands::Inspect { ref path, ref vault } => cmd_inspect(vault.as_ref(), path, &cli),
@@ -91,20 +104,32 @@ fn main() -> Result<()> {
 
 // ── Storage helpers ──────────────────────────────────────────────
 
+/// Resolve the data directory: --data-dir override > config lookup > error.
 fn resolve_data_dir(cli: &Cli) -> Result<PathBuf> {
     if let Some(ref dir) = cli.data_dir {
-        Ok(dir.clone())
-    } else {
-        let home = std::env::var("HOME").context("HOME not set")?;
-        Ok(PathBuf::from(home).join(".biem"))
+        return Ok(dir.clone());
     }
+    // No override — fall back to legacy default ~/.biem/
+    // (will be replaced by config-based resolution once vaults are registered)
+    let home = std::env::var("HOME").context("HOME not set")?;
+    Ok(PathBuf::from(home).join(".biem"))
 }
 
-fn ensure_data_dir(cli: &Cli) -> Result<PathBuf> {
-    let dir = resolve_data_dir(cli)?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create data dir: {}", dir.display()))?;
-    Ok(dir)
+/// Resolve data dir for a known vault path, using config.
+fn resolve_data_dir_for_vault(vault_path: &PathBuf, cli: &Cli) -> Result<PathBuf> {
+    if let Some(ref dir) = cli.data_dir {
+        return Ok(dir.clone());
+    }
+    // Try config resolution
+    let cfg = config::load_config().unwrap_or_default();
+    match config::resolve_vault(vault_path, &cfg) {
+        Ok(entry) => Ok(entry.data_dir),
+        Err(_) => {
+            // Fall back to legacy default
+            let home = std::env::var("HOME").context("HOME not set")?;
+            Ok(PathBuf::from(home).join(".biem"))
+        }
+    }
 }
 
 /// Create persistent stores (DuckDB + LMDB).
@@ -158,11 +183,70 @@ fn build_pipeline_and_index(
 
 // ── Commands ─────────────────────────────────────────────────────
 
+fn cmd_init(path: &PathBuf, local: bool) -> Result<()> {
+    let vault_path = path.canonicalize()
+        .with_context(|| format!("vault path does not exist: {}", path.display()))?;
+
+    let biem_dir = config::default_config_dir()
+        .context("could not determine BIEM config directory")?;
+    let mut cfg = config::load_config().unwrap_or_default();
+
+    let storage = if local { StorageMode::Local } else { StorageMode::Global };
+
+    let (name, entry) = config::register_vault(&vault_path, storage, &biem_dir, &mut cfg)
+        .with_context(|| format!("failed to register vault: {}", vault_path.display()))?;
+
+    config::save_config(&cfg)
+        .context("failed to save config")?;
+
+    println!("✓ Registered vault '{}' at {}", name, vault_path.display());
+    println!("  storage: {:?}", entry.storage);
+    println!("  data_dir: {}", entry.data_dir.display());
+
+    // Run initial bulk index
+    let (registry, bitmap_store) = open_persistent_stores(&entry.data_dir)?;
+    let mut pipeline = IngestionPipeline::new(
+        vec![Box::new(MarkdownParser)],
+        registry,
+        bitmap_store,
+    );
+
+    let result = pipeline.bulk_index(&vault_path)
+        .context("initial index failed")?;
+
+    println!("✓ Indexed {} documents ({} bitmap keys, {}ms)",
+        result.docs_indexed, result.bitmaps_created, result.duration_ms);
+
+    Ok(())
+}
+
+fn cmd_config() -> Result<()> {
+    let cfg = config::load_config().unwrap_or_default();
+
+    if cfg.vaults.is_empty() {
+        println!("No vaults registered. Run `biem init <vault>` to get started.");
+        return Ok(());
+    }
+
+    println!("Registered vaults:");
+    for (name, entry) in &cfg.vaults {
+        println!();
+        println!("  [{}]", name);
+        println!("    path:     {}", entry.path.display());
+        println!("    storage:  {:?}", entry.storage);
+        println!("    data_dir: {}", entry.data_dir.display());
+    }
+
+    Ok(())
+}
+
 fn cmd_index(path: &PathBuf, cli: &Cli) -> Result<()> {
     let (registry, bitmap_store) = if cli.memory {
         open_memory_stores()
     } else {
-        let data_dir = ensure_data_dir(cli)?;
+        let data_dir = resolve_data_dir_for_vault(path, cli)?;
+        std::fs::create_dir_all(&data_dir)
+            .with_context(|| format!("failed to create data dir: {}", data_dir.display()))?;
         eprintln!("Data dir: {}", data_dir.display());
         open_persistent_stores(&data_dir)?
     };
