@@ -1,6 +1,6 @@
 # BIEM Module Contracts
 
-> Status: **DRAFT — v1**
+> Status: **Phase 1 — implemented and aligned with code**
 > Reference: `001-system-overview.md` for architecture context
 > Language: Rust
 > Scope: Phase 1 — Obsidian core only
@@ -268,6 +268,10 @@ pub trait Registry: Send + Sync {
     /// Update the file path for an existing document (file move/rename).
     fn update_path(&mut self, doc_id: DocId, new_path: PathBuf) -> Result<(), RegistryError>;
 
+    /// Delete a document and all its chunks from the registry.
+    /// Used by compaction to permanently remove tombstoned documents.
+    fn delete_doc(&mut self, doc_id: DocId) -> Result<(), RegistryError>;
+
     // --- Chunk operations ---
 
     /// Replace all chunks for a document (delete old, insert new).
@@ -357,6 +361,9 @@ pub trait BitmapStore: Send + Sync {
     /// Get the current tombstone bitmap.
     fn get_tombstone(&self) -> Result<RoaringBitmap, BitmapError>;
 
+    /// Clear the tombstone bitmap entirely (used by compaction).
+    fn clear_tombstone(&mut self) -> Result<(), BitmapError>;
+
     // --- Query helpers ---
 
     /// List all bitmap keys, optionally filtered by prefix (e.g. "tag:").
@@ -422,14 +429,13 @@ pub enum ChangeKind {
 }
 
 /// Summary of what ingestion did for a single event.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IngestResult {
-    pub doc_id: DocId,
     pub action: IngestAction,
-    pub bitmaps_updated: Vec<BitmapKey>,
+    pub bitmaps_updated: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestAction {
     Indexed,          // New file, fully indexed
     Updated,          // Existing file, content changed
@@ -447,31 +453,45 @@ pub struct IngestionPipeline {
 
 impl IngestionPipeline {
     /// Process a single change event (incremental mode).
-    pub fn process_event(&mut self, event: ChangeEvent) -> Result<IngestResult, IngestError>;
+    pub fn process_event(&mut self, event: &ChangeEvent) -> Result<IngestResult, IngestError>;
 
     /// Perform initial bulk indexing of an entire directory tree.
     /// Uses batch-then-flush strategy for performance.
     pub fn bulk_index(&mut self, root: &Path) -> Result<BulkIndexResult, IngestError>;
+
+    /// Remove tombstoned doc IDs from all bitmaps, delete from registry,
+    /// and clear the tombstone bitmap. Returns a compaction summary.
+    pub fn compact(&mut self) -> Result<CompactResult, IngestError>;
+
+    /// Decompose the pipeline into its owned parts for handoff (e.g. to a query engine).
+    pub fn into_parts(self) -> (Vec<Box<dyn Parser>>, Box<dyn Registry>, Box<dyn BitmapStore>);
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BulkIndexResult {
-    pub documents_indexed: u32,
+    pub docs_indexed: u32,
     pub bitmaps_created: u32,
-    pub duration: std::time::Duration,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CompactResult {
+    pub docs_removed: u32,
+    pub bitmaps_cleaned: u32,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
     #[error("no parser found for: {0}")]
     NoParser(PathBuf),
-    #[error("parse error: {0}")]
+    #[error(transparent)]
     Parse(#[from] ParseError),
-    #[error("registry error: {0}")]
+    #[error(transparent)]
     Registry(#[from] RegistryError),
-    #[error("bitmap error: {0}")]
+    #[error(transparent)]
     Bitmap(#[from] BitmapError),
-    #[error("IO error: {0}")]
+    #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
 ```
@@ -587,21 +607,61 @@ pub struct QueryResult {
     pub query_time_us: u64,         // Microseconds
 }
 
+/// The result of inspecting a single document in the index.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InspectResult {
+    pub doc_id: DocId,
+    pub file_path: PathBuf,
+    pub source_type: String,
+    pub auto_type: Option<String>,
+    pub blake3_hash: String,
+    pub last_indexed: Timestamp,
+    pub chunks: Vec<ChunkPointer>,
+    pub bitmap_keys: Vec<BitmapKey>,
+}
+
+/// Summary status of the entire index.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexStatus {
+    pub total_documents: u32,
+    pub total_bitmaps: usize,
+    pub tombstoned: u64,
+    pub next_doc_id: DocId,
+    pub next_chunk_id: ChunkId,
+}
+
+/// A filter entry for discovery (key + cardinality).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FilterEntry {
+    pub key: BitmapKey,
+    pub cardinality: u32,
+}
+
 pub trait QueryEngine: Send + Sync {
+    /// Execute a bitmap filter query, returning matching document pointers.
     fn query(&self, request: QueryRequest) -> Result<QueryResult, QueryError>;
 
     /// List available bitmap keys for filter discovery.
     /// Consumers (especially LLMs) need to know what filters exist.
     fn list_filters(&self, category: Option<BitmapCategory>) -> Result<Vec<BitmapCatalogEntry>, QueryError>;
+
+    /// Inspect a single file in the index by path.
+    fn inspect(&self, path: &Path) -> Result<Option<InspectResult>, QueryError>;
+
+    /// Get summary status of the index.
+    fn status(&self) -> Result<IndexStatus, QueryError>;
+
+    /// List available filter keys with cardinality, optionally by category prefix.
+    fn list_filter_keys(&self, category: Option<&str>) -> Result<Vec<FilterEntry>, QueryError>;
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
     #[error("unknown bitmap key: {0}")]
     UnknownFilter(BitmapKey),
-    #[error("bitmap error: {0}")]
+    #[error(transparent)]
     Bitmap(#[from] BitmapError),
-    #[error("registry error: {0}")]
+    #[error(transparent)]
     Registry(#[from] RegistryError),
 }
 ```

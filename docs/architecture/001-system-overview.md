@@ -1,6 +1,6 @@
 # BIEM System Architecture — Overview
 
-> Status: **DRAFT — Iteration 2 (decisions resolved)**
+> Status: **Phase 1 — Obsidian core implemented**
 > Scope: Obsidian vault use case first, designed for extensibility to code/confluence/other sources
 > See also: `002-roadmap.md` for phased build plan
 

@@ -1,11 +1,13 @@
 # BIEM Roadmap
 
-> Status: **DRAFT — v1**
+> Status: **Phase 1 — Complete**
 > Reference: `001-system-overview.md` for architecture details
 
-## Phase 1 — Obsidian Core (Current Focus)
+## Phase 1 — Obsidian Core ✅
 
 The minimal viable index: ingest an Obsidian vault, maintain bitmap indices, expose structured queries.
+
+**All Phase 1 modules are implemented and tested.**
 
 ### Module Build Order
 
@@ -38,82 +40,83 @@ gantt
 ### Task Breakdown
 
 #### 1. Foundation: Registry
-- [ ] DuckDB schema (documents, chunks, bitmap_catalog, global_state)
-- [ ] CRUD operations: assign_id, lookup, update, bulk_insert
-- [ ] Config/state directory setup (`~/.biem/` global, `.biem/` local)
-- [ ] `config.toml` vault registration
-- [ ] Unit tests for all CRUD ops
+- [x] DuckDB schema (documents, chunks, bitmap_catalog, global_state)
+- [x] CRUD operations: assign_id, lookup, update, bulk_insert
+- [x] Config/state directory setup (`~/.biem/` global, `.biem/` local)
+- [x] `config.toml` vault registration
+- [x] Unit tests for all CRUD ops
 
 #### 2. Foundation: Bitmap Store
-- [ ] LMDB database setup with heed crate
-- [ ] Roaring Bitmap serialization (portable format) via `roaring` crate
-- [ ] Core operations: get, insert_id, remove_id, intersect, union, and_not
-- [ ] Tombstone bitmap: insert, apply to queries
-- [ ] Bitmap catalog sync (cardinality updates to DuckDB)
-- [ ] Unit tests for all bitmap operations
+- [x] LMDB database setup with heed crate
+- [x] Roaring Bitmap serialization (portable format) via `roaring` crate
+- [x] Core operations: get, insert_id, remove_id, intersect, union, and_not
+- [x] Tombstone bitmap: insert, apply to queries
+- [x] Bitmap catalog sync (cardinality updates to DuckDB)
+- [x] Unit tests for all bitmap operations
 
 #### 3. Parsing: Markdown Parser
-- [ ] YAML frontmatter extraction (tags, aliases, custom fields)
-- [ ] `[[wikilink]]` extraction (with alias support `[[target|display]]`)
-- [ ] `[markdown](link)` extraction
-- [ ] Header hierarchy → chunk boundaries (byte ranges)
-- [ ] Auto-type detection (task list density, link density, etc.)
-- [ ] Hierarchical tag flattening (`#a/b/c` → 3 tags)
-- [ ] Parser trait implementation (`can_parse`, `parse`)
-- [ ] Unit tests against sample vault files
+- [x] YAML frontmatter extraction (tags, aliases, custom fields)
+- [x] `[[wikilink]]` extraction (with alias support `[[target|display]]`)
+- [x] `[markdown](link)` extraction
+- [x] Header hierarchy → chunk boundaries (byte ranges)
+- [x] Auto-type detection (task list density, link density, etc.)
+- [x] Hierarchical tag flattening (`#a/b/c` → 3 tags)
+- [x] Parser trait implementation (`can_parse`, `parse`)
+- [x] Unit tests against sample vault files
 
 #### 4. Ingestion: Pipeline
-- [ ] BLAKE3 hashing for change detection
-- [ ] Initial indexing: batch-then-flush mode (walk → parse all → bulk write)
-- [ ] Incremental indexing: single-file update path
-- [ ] Diff logic: detect added/changed/removed tags, links, type
-- [ ] Bitmap update logic (add to new bitmaps, remove from stale ones)
-- [ ] File delete → tombstone insertion
-- [ ] File move → registry path update + folder bitmap update
-- [ ] Integration tests: init a small vault, verify registry + bitmaps
+- [x] BLAKE3 hashing for change detection
+- [x] Initial indexing: batch-then-flush mode (walk → parse all → bulk write)
+- [x] Incremental indexing: single-file update path
+- [x] Diff logic: detect added/changed/removed tags, links, type
+- [x] Bitmap update logic (add to new bitmaps, remove from stale ones)
+- [x] File delete → tombstone insertion
+- [x] File move → registry path update + folder bitmap update
+- [x] Compaction: remove tombstoned docs from bitmaps and registry
+- [x] Integration tests: init a small vault, verify registry + bitmaps
 
 #### 5. Ingestion: Watcher
-- [ ] `notify` crate filesystem watcher
-- [ ] Debounce (100ms default)
-- [ ] Map fs events to `ChangeEvent { path, kind }`
-- [ ] SourceFeed trait definition
-- [ ] FsWatcher as first SourceFeed implementation
-- [ ] Integration test: modify file, verify event fires
+- [x] `notify` crate filesystem watcher
+- [x] Debounce (100ms default)
+- [x] Map fs events to `ChangeEvent { path, kind }`
+- [x] SourceFeed trait definition
+- [x] FsWatcher as first SourceFeed implementation
+- [x] Integration test: modify file, verify event fires
 
 #### 6. Query Engine
-- [ ] `QueryRequest` → bitmap catalog lookup for cardinality
-- [ ] Cardinality-sorted intersection (smallest first)
-- [ ] AND / OR / NOT filter composition
-- [ ] Tombstone masking (`AND NOT _tombstone`)
-- [ ] Registry resolution (IDs → MatchPointer with metadata)
-- [ ] Limit/pagination
-- [ ] Unit tests: synthetic bitmaps, verify intersection logic
-- [ ] Integration tests: full pipeline (ingest → query → verify results)
+- [x] `QueryRequest` → bitmap catalog lookup for cardinality
+- [x] Cardinality-sorted intersection (smallest first)
+- [x] AND / OR / NOT filter composition
+- [x] Tombstone masking (`AND NOT _tombstone`)
+- [x] Registry resolution (IDs → MatchPointer with metadata)
+- [x] Limit/pagination
+- [x] Unit tests: synthetic bitmaps, verify intersection logic
+- [x] Integration tests: full pipeline (ingest → query → verify results)
 
 #### 7. Interface: CLI
-- [ ] `biem init <path> [--local]` — register vault, run initial index
-- [ ] `biem config` — show/set configuration
-- [ ] `biem status` — index health, document count, bitmap count
-- [ ] `biem search --tag X --type Y [--op and|or]` — query with filters
-- [ ] `biem inspect <file>` — show doc_id, tags, links, type, chunks
-- [ ] `biem bitmaps [--category tag|folder|...]` — list bitmaps with cardinality
-- [ ] `biem compact` — run tombstone cleanup
-- [ ] Output formatting: table, JSON
+- [x] `biem init <path> [--local]` — register vault, run initial index
+- [x] `biem config` — show/set configuration
+- [x] `biem status` — index health, document count, bitmap count
+- [x] `biem search --tag X --type Y [--op and|or]` — query with filters
+- [x] `biem inspect <file>` — show doc_id, tags, links, type, chunks
+- [x] `biem bitmaps [--category tag|folder|...]` — list bitmaps with cardinality
+- [x] `biem compact` — run tombstone cleanup
+- [x] Output formatting: table, JSON (`--json` flag)
 
 #### 8. Interface: MCP Server
-- [ ] MCP tool: `biem_search` (filters → MatchPointers)
-- [ ] MCP tool: `biem_inspect` (file → metadata)
-- [ ] MCP tool: `biem_status` (index health)
-- [ ] MCP tool: `biem_bitmaps` (available filters for discovery)
+- [x] MCP tool: `biem_search` (filters → MatchPointers)
+- [x] MCP tool: `biem_inspect` (file → metadata)
+- [x] MCP tool: `biem_status` (index health)
+- [x] MCP tool: `biem_bitmaps` (available filters for discovery)
 - [ ] MCP resource: expose vault metadata as resource
-- [ ] Integration test: MCP client → query → verify response
+- [x] Integration test: MCP client → query → verify response
 
 #### 9. Interface: HTTP API
-- [ ] `POST /search` — same as CLI search
-- [ ] `GET /status` — index health
-- [ ] `GET /inspect/:path` — file metadata
-- [ ] `GET /bitmaps` — list with cardinality
-- [ ] JSON response format matching MatchPointer schema
+- [x] `POST /search` — same as CLI search
+- [x] `GET /status` — index health
+- [x] `GET /inspect/:path` — file metadata
+- [x] `GET /bitmaps` — list with cardinality
+- [x] JSON response format matching MatchPointer schema
 
 ---
 
