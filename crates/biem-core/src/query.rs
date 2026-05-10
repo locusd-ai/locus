@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::bitmap::BitmapError;
 use crate::registry::{BitmapCatalogEntry, RegistryError};
@@ -65,6 +65,36 @@ pub struct QueryResult {
     pub query_time_us: u64,
 }
 
+/// The result of inspecting a single document in the index.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InspectResult {
+    pub doc_id: DocId,
+    pub file_path: PathBuf,
+    pub source_type: String,
+    pub auto_type: Option<String>,
+    pub blake3_hash: String,
+    pub last_indexed: Timestamp,
+    pub chunks: Vec<ChunkPointer>,
+    pub bitmap_keys: Vec<BitmapKey>,
+}
+
+/// Summary status of the entire index.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexStatus {
+    pub total_documents: u32,
+    pub total_bitmaps: usize,
+    pub tombstoned: u64,
+    pub next_doc_id: DocId,
+    pub next_chunk_id: ChunkId,
+}
+
+/// A filter entry for discovery.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FilterEntry {
+    pub key: BitmapKey,
+    pub cardinality: u32,
+}
+
 // ── Trait ─────────────────────────────────────────────────────────
 
 /// Query engine that resolves bitmap filters and returns structural pointers.
@@ -76,6 +106,15 @@ pub trait QueryEngine: Send + Sync {
         &self,
         category: Option<BitmapCategory>,
     ) -> Result<Vec<BitmapCatalogEntry>, QueryError>;
+
+    /// Inspect a single file in the index by path.
+    fn inspect(&self, path: &Path) -> Result<Option<InspectResult>, QueryError>;
+
+    /// Get summary status of the index.
+    fn status(&self) -> Result<IndexStatus, QueryError>;
+
+    /// List available filter keys with cardinality, optionally by category prefix.
+    fn list_filter_keys(&self, category: Option<&str>) -> Result<Vec<FilterEntry>, QueryError>;
 }
 
 // ── Error ─────────────────────────────────────────────────────────

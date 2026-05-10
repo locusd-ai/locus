@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Instant;
 
 use roaring::RoaringBitmap;
@@ -5,8 +6,8 @@ use tracing::instrument;
 
 use biem_core::bitmap::BitmapStore;
 use biem_core::query::{
-    ChunkPointer, Filter, MatchPointer, QueryEngine, QueryError, QueryRequest,
-    QueryResult,
+    ChunkPointer, Filter, FilterEntry, IndexStatus, InspectResult as QueryInspectResult,
+    MatchPointer, QueryEngine, QueryError, QueryRequest, QueryResult,
 };
 use biem_core::registry::{BitmapCatalogEntry, Registry};
 use biem_core::types::BitmapCategory;
@@ -158,5 +159,76 @@ impl QueryEngine for BitmapQueryEngine {
         category: Option<BitmapCategory>,
     ) -> Result<Vec<BitmapCatalogEntry>, QueryError> {
         Ok(self.registry.list_catalog(category)?)
+    }
+
+    fn inspect(&self, path: &Path) -> Result<Option<QueryInspectResult>, QueryError> {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let doc = self.registry.lookup_by_path(&canonical)?
+            .or(self.registry.lookup_by_path(path).ok().flatten());
+
+        let doc = match doc {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+
+        let chunks = self.registry.get_chunks(doc.doc_id)?;
+        let chunk_ptrs: Vec<ChunkPointer> = chunks
+            .into_iter()
+            .map(|c| ChunkPointer {
+                chunk_id: c.chunk_id,
+                kind: format!("{:?}", c.kind),
+                byte_start: c.byte_start,
+                byte_end: c.byte_end,
+                label: c.label,
+            })
+            .collect();
+
+        // Find bitmap keys containing this doc
+        let all_keys = self.bitmap_store.list_keys(None)?;
+        let mut doc_keys: Vec<String> = all_keys
+            .into_iter()
+            .filter(|k| self.bitmap_store.get(k).map(|bm| bm.contains(doc.doc_id)).unwrap_or(false))
+            .collect();
+        doc_keys.sort();
+
+        let hash = doc.blake3_hash.iter().map(|b| format!("{b:02x}")).collect::<String>();
+
+        Ok(Some(QueryInspectResult {
+            doc_id: doc.doc_id,
+            file_path: doc.file_path,
+            source_type: format!("{:?}", doc.source_type),
+            auto_type: doc.auto_type.map(|t| format!("{:?}", t)),
+            blake3_hash: hash,
+            last_indexed: doc.last_indexed,
+            chunks: chunk_ptrs,
+            bitmap_keys: doc_keys,
+        }))
+    }
+
+    fn status(&self) -> Result<IndexStatus, QueryError> {
+        let state = self.registry.get_global_state()?;
+        let tombstones = self.bitmap_store.get_tombstone()?;
+        let bitmap_count = self.bitmap_store.list_keys(None)?.len();
+
+        Ok(IndexStatus {
+            total_documents: state.total_documents,
+            total_bitmaps: bitmap_count,
+            tombstoned: tombstones.len(),
+            next_doc_id: state.next_doc_id,
+            next_chunk_id: state.next_chunk_id,
+        })
+    }
+
+    fn list_filter_keys(&self, category: Option<&str>) -> Result<Vec<FilterEntry>, QueryError> {
+        let prefix = category.map(|c| format!("{c}:"));
+        let keys = self.bitmap_store.list_keys(prefix.as_deref())?;
+        let entries = keys
+            .iter()
+            .map(|k| FilterEntry {
+                key: k.clone(),
+                cardinality: self.bitmap_store.cardinality(k).unwrap_or(0),
+            })
+            .collect();
+        Ok(entries)
     }
 }
