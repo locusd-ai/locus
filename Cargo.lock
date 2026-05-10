@@ -397,10 +397,13 @@ version = "0.1.0"
 dependencies = [
  "biem-bitmap",
  "biem-core",
+ "biem-ingest",
+ "biem-parser",
  "biem-registry",
  "roaring",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tracing",
 ]

@@ -8,8 +8,10 @@ pub mod types;
 pub mod parser;
 pub mod registry;
 pub mod bitmap;
+pub mod query;
 
 pub use types::*;
 pub use parser::*;
 pub use registry::*;
 pub use bitmap::*;
+pub use query::*;
