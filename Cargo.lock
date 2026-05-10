@@ -362,10 +362,14 @@ name = "biem-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "biem-bitmap",
  "biem-core",
  "biem-ingest",
+ "biem-parser",
  "biem-query",
+ "biem-registry",
  "biem-watcher",
+ "clap",
  "tokio",
  "tracing",
  "tracing-subscriber",
