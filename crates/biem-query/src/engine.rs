@@ -51,11 +51,28 @@ impl BitmapQueryEngine {
                 Ok(universe - resolved)
             }
             Filter::And(children) => {
+                // Sort children by estimated cardinality (smallest first) for faster intersection.
+                let mut indexed: Vec<(usize, u64)> = children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, child)| {
+                        let card = self.estimate_cardinality(child);
+                        (i, card)
+                    })
+                    .collect();
+                indexed.sort_by_key(|&(_, card)| card);
+
                 let mut result: Option<RoaringBitmap> = None;
-                for child in children {
-                    let bm = self.resolve_filter(child)?;
+                for (i, _) in indexed {
+                    let bm = self.resolve_filter(&children[i])?;
                     result = Some(match result {
-                        Some(acc) => acc & bm,
+                        Some(acc) => {
+                            let intersection = acc & bm;
+                            if intersection.is_empty() {
+                                return Ok(RoaringBitmap::new()); // short-circuit
+                            }
+                            intersection
+                        }
                         None => bm,
                     });
                 }
@@ -67,6 +84,23 @@ impl BitmapQueryEngine {
                     result |= self.resolve_filter(child)?;
                 }
                 Ok(result)
+            }
+        }
+    }
+
+    /// Estimate cardinality of a filter for sorting purposes.
+    /// For Key filters, uses bitmap_store.cardinality(). For compound filters, uses a rough estimate.
+    fn estimate_cardinality(&self, filter: &Filter) -> u64 {
+        match filter {
+            Filter::Key(key) => self.bitmap_store.cardinality(key).unwrap_or(0) as u64,
+            Filter::Not(_) => u64::MAX, // NOT is expensive, process last
+            Filter::And(children) => {
+                // Estimate as min of children
+                children.iter().map(|c| self.estimate_cardinality(c)).min().unwrap_or(0)
+            }
+            Filter::Or(children) => {
+                // Estimate as sum of children (upper bound)
+                children.iter().map(|c| self.estimate_cardinality(c)).sum()
             }
         }
     }
