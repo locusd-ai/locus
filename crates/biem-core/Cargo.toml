@@ -8,4 +8,10 @@ edition.workspace = true
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
+dirs = { workspace = true }
+blake3 = { workspace = true }
 roaring = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

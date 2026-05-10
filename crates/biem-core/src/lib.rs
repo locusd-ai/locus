@@ -9,6 +9,7 @@ pub mod parser;
 pub mod registry;
 pub mod bitmap;
 pub mod query;
+pub mod config;
 
 pub use types::*;
 pub use parser::*;
