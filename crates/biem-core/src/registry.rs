@@ -102,6 +102,9 @@ pub trait Registry: Send + Sync {
     /// Update the file path for an existing document (file move/rename).
     fn update_path(&mut self, doc_id: DocId, new_path: PathBuf) -> Result<(), RegistryError>;
 
+    /// Delete a document and all its chunks from the registry.
+    fn delete_doc(&mut self, doc_id: DocId) -> Result<(), RegistryError>;
+
     // --- Chunk operations ---
 
     /// Replace all chunks for a document (delete old, insert new).

@@ -59,6 +59,14 @@ pub struct BulkIndexResult {
     pub duration_ms: u64,
 }
 
+/// Result of a compaction run.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CompactResult {
+    pub docs_removed: u32,
+    pub bitmaps_cleaned: u32,
+    pub duration_ms: u64,
+}
+
 // ── Pipeline ─────────────────────────────────────────────────────
 
 /// Orchestrates parsers, registry, and bitmap store for ingestion.
@@ -436,5 +444,71 @@ impl IngestionPipeline {
             }
         }
         Ok(())
+    }
+
+    // ── Compaction ───────────────────────────────────────────────
+
+    /// Remove tombstoned doc IDs from all bitmaps and delete them from the registry.
+    /// Clears the tombstone bitmap and returns a summary.
+    #[instrument(skip(self))]
+    pub fn compact(&mut self) -> Result<CompactResult, IngestError> {
+        let start = Instant::now();
+        let tombstones = self.bitmap_store.get_tombstone()?;
+
+        if tombstones.is_empty() {
+            return Ok(CompactResult {
+                docs_removed: 0,
+                bitmaps_cleaned: 0,
+                duration_ms: start.elapsed().as_millis() as u64,
+            });
+        }
+
+        let doc_ids: Vec<DocId> = tombstones.iter().collect();
+        let all_keys = self.bitmap_store.list_keys(None)?;
+
+        // Remove tombstoned IDs from every bitmap
+        let mut bitmaps_cleaned = 0u32;
+        for key in &all_keys {
+            let bm = self.bitmap_store.get(key)?;
+            let mut dirty = false;
+            for &doc_id in &doc_ids {
+                if bm.contains(doc_id) {
+                    dirty = true;
+                }
+            }
+            if dirty {
+                let mut bm = bm;
+                for &doc_id in &doc_ids {
+                    bm.remove(doc_id);
+                }
+                if bm.is_empty() {
+                    self.bitmap_store.delete(key)?;
+                } else {
+                    self.bitmap_store.put(key, &bm)?;
+                }
+                bitmaps_cleaned += 1;
+            }
+        }
+
+        // Delete docs from registry (ignore NotFound — may already be gone)
+        for &doc_id in &doc_ids {
+            match self.registry.delete_doc(doc_id) {
+                Ok(()) => {}
+                Err(RegistryError::NotFound(_)) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        // Clear the tombstone bitmap
+        self.bitmap_store.clear_tombstone()?;
+
+        let docs_removed = doc_ids.len() as u32;
+        info!(docs_removed, bitmaps_cleaned, "compaction complete");
+
+        Ok(CompactResult {
+            docs_removed,
+            bitmaps_cleaned,
+            duration_ms: start.elapsed().as_millis() as u64,
+        })
     }
 }

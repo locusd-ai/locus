@@ -130,6 +130,16 @@ impl Registry for InMemoryRegistry {
         Ok(())
     }
 
+    fn delete_doc(&mut self, doc_id: DocId) -> Result<(), RegistryError> {
+        let record = self
+            .docs
+            .remove(&doc_id)
+            .ok_or(RegistryError::NotFound(doc_id))?;
+        self.path_index.remove(&record.file_path);
+        self.chunks.remove(&doc_id);
+        Ok(())
+    }
+
     fn replace_chunks(
         &mut self,
         doc_id: DocId,

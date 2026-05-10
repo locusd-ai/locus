@@ -412,6 +412,20 @@ impl Registry for DuckDbRegistry {
         Ok(())
     }
 
+    fn delete_doc(&mut self, doc_id: DocId) -> Result<(), RegistryError> {
+        let conn = self.conn();
+        // Delete chunks first (foreign key dependency)
+        conn.execute("DELETE FROM chunks WHERE doc_id = ?", params![doc_id])
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        let affected = conn
+            .execute("DELETE FROM documents WHERE doc_id = ?", params![doc_id])
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        if affected == 0 {
+            return Err(RegistryError::NotFound(doc_id));
+        }
+        Ok(())
+    }
+
     #[instrument(skip(self, chunks))]
     fn replace_chunks(
         &mut self,

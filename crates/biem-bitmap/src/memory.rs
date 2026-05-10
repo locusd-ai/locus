@@ -83,6 +83,11 @@ impl BitmapStore for InMemoryBitmapStore {
         Ok(self.bitmaps.get(TOMBSTONE_KEY).cloned().unwrap_or_default())
     }
 
+    fn clear_tombstone(&mut self) -> Result<(), BitmapError> {
+        self.bitmaps.remove(TOMBSTONE_KEY);
+        Ok(())
+    }
+
     fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<BitmapKey>, BitmapError> {
         let keys = self
             .bitmaps

@@ -158,6 +158,10 @@ impl BitmapStore for LmdbBitmapStore {
         self.get(TOMBSTONE_KEY)
     }
 
+    fn clear_tombstone(&mut self) -> Result<(), BitmapError> {
+        self.delete(TOMBSTONE_KEY)
+    }
+
     #[instrument(skip(self))]
     fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<BitmapKey>, BitmapError> {
         let rtxn = self

@@ -38,6 +38,9 @@ pub trait BitmapStore: Send + Sync {
     /// Get the current tombstone bitmap.
     fn get_tombstone(&self) -> Result<RoaringBitmap, BitmapError>;
 
+    /// Clear the tombstone bitmap entirely.
+    fn clear_tombstone(&mut self) -> Result<(), BitmapError>;
+
     // --- Query helpers ---
 
     /// List all bitmap keys, optionally filtered by prefix (e.g. "tag:").

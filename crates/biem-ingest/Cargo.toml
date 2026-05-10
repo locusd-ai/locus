@@ -13,6 +13,7 @@ blake3 = { workspace = true }
 roaring = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

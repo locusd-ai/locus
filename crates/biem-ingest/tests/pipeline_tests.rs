@@ -228,4 +228,51 @@ mod tests {
         assert_eq!(result.docs_indexed, 2);
         assert!(result.bitmaps_created > 0);
     }
+
+    // ── Compact ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_compact_removes_tombstoned_docs() {
+
+        let registry = Box::new(InMemoryRegistry::new());
+        let bitmap_store = Box::new(InMemoryBitmapStore::new());
+        let mut pipeline = IngestionPipeline::new(
+            vec![Box::new(MarkdownParser)],
+            registry,
+            bitmap_store,
+        );
+
+        // Index two files
+        pipeline.process_event(&ChangeEvent {
+            kind: ChangeKind::Created,
+            path: fixture_path("simple.md"),
+        }).unwrap();
+        pipeline.process_event(&ChangeEvent {
+            kind: ChangeKind::Created,
+            path: fixture_path("task-note.md"),
+        }).unwrap();
+
+        // Delete one
+        pipeline.process_event(&ChangeEvent {
+            kind: ChangeKind::Deleted,
+            path: fixture_path("simple.md"),
+        }).unwrap();
+
+        // Compact
+        let compact_result = pipeline.compact().unwrap();
+        assert_eq!(compact_result.docs_removed, 1);
+
+        // Verify tombstone bitmap is now empty
+        let (_, registry, bitmap_store) = pipeline.into_parts();
+        let tombstones = bitmap_store.get_tombstone().unwrap();
+        assert!(tombstones.is_empty(), "tombstone bitmap should be empty after compact");
+
+        // Verify the deleted doc is gone from registry
+        let lookup = registry.lookup_by_id(1).unwrap();
+        assert!(lookup.is_none(), "deleted doc should be gone from registry");
+
+        // The remaining doc should still be queryable
+        let lookup = registry.lookup_by_id(2).unwrap();
+        assert!(lookup.is_some(), "surviving doc should still exist");
+    }
 }
