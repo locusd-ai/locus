@@ -626,6 +626,26 @@ impl Registry for DuckDbRegistry {
         Ok(results)
     }
 
+    fn list_all_docs(&self) -> Result<Vec<DocRecord>, RegistryError> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT doc_id, file_path, source_type, blake3_hash, last_indexed, auto_type
+                 FROM documents",
+            )
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], Self::row_to_doc_record)
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| RegistryError::Database(e.to_string()))?);
+        }
+        Ok(results)
+    }
+
     fn get_global_state(&self) -> Result<GlobalState, RegistryError> {
         let conn = self.conn();
         let mut stmt = conn

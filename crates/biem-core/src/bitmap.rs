@@ -49,6 +49,35 @@ pub trait BitmapStore: Send + Sync {
     /// Get the cardinality of a bitmap without deserializing the full bitmap.
     /// Falls back to deserialize + len() if format doesn't support it.
     fn cardinality(&self, key: &str) -> Result<u32, BitmapError>;
+
+    // --- Jaccard similarity ---
+
+    /// Compute Jaccard similarity between two bitmap keys: |A ∩ B| / |A ∪ B|.
+    /// Returns 0.0 if both bitmaps are empty, 1.0 if identical.
+    /// Default implementation uses get() — backends may override for efficiency.
+    fn jaccard_keys(&self, key_a: &str, key_b: &str) -> Result<f64, BitmapError> {
+        let a = self.get(key_a)?;
+        let b = self.get(key_b)?;
+        Ok(jaccard(&a, &b))
+    }
+
+    /// Compute Jaccard similarity between two pre-loaded bitmaps.
+    /// Useful for doc-as-keyset similarity where bitmaps are already in memory.
+    fn jaccard_bitmaps(&self, a: &RoaringBitmap, b: &RoaringBitmap) -> f64 {
+        jaccard(a, b)
+    }
+}
+
+/// Compute Jaccard similarity: |A ∩ B| / |A ∪ B|.
+/// Returns 0.0 when both sets are empty.
+pub fn jaccard(a: &RoaringBitmap, b: &RoaringBitmap) -> f64 {
+    let intersection = a.intersection_len(b);
+    let union = a.union_len(b);
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    }
 }
 
 /// Errors from bitmap store operations.

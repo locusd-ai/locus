@@ -211,6 +211,10 @@ impl Registry for InMemoryRegistry {
             .collect())
     }
 
+    fn list_all_docs(&self) -> Result<Vec<DocRecord>, RegistryError> {
+        Ok(self.docs.values().cloned().collect())
+    }
+
     fn get_global_state(&self) -> Result<GlobalState, RegistryError> {
         Ok(GlobalState {
             next_doc_id: self.next_doc_id,
