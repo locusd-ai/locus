@@ -275,4 +275,77 @@ mod tests {
         let lookup = registry.lookup_by_id(2).unwrap();
         assert!(lookup.is_some(), "surviving doc should still exist");
     }
+
+    // ── Idempotent bulk_index ────────────────────────────────────
+
+    #[test]
+    fn test_bulk_index_twice_skips_all() {
+        let mut pipeline = make_pipeline();
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "---\ntags: [x]\n---\n# A\nHello").unwrap();
+        fs::write(dir.path().join("b.md"), "# B\nWorld").unwrap();
+
+        let r1 = pipeline.bulk_index(dir.path()).unwrap();
+        assert_eq!(r1.docs_indexed, 2);
+        assert_eq!(r1.docs_skipped, 0);
+
+        let r2 = pipeline.bulk_index(dir.path()).unwrap();
+        assert_eq!(r2.docs_indexed, 0);
+        assert_eq!(r2.docs_skipped, 2);
+        assert_eq!(r2.docs_updated, 0);
+        assert_eq!(r2.docs_tombstoned, 0);
+    }
+
+    #[test]
+    fn test_bulk_index_detects_modified_file() {
+        let mut pipeline = make_pipeline();
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "---\ntags: [x]\n---\n# A\nHello").unwrap();
+
+        let r1 = pipeline.bulk_index(dir.path()).unwrap();
+        assert_eq!(r1.docs_indexed, 1);
+
+        // Modify the file
+        fs::write(dir.path().join("a.md"), "---\ntags: [y]\n---\n# A\nChanged").unwrap();
+
+        let r2 = pipeline.bulk_index(dir.path()).unwrap();
+        assert_eq!(r2.docs_indexed, 0);
+        assert_eq!(r2.docs_updated, 1);
+        assert_eq!(r2.docs_skipped, 0);
+    }
+
+    #[test]
+    fn test_bulk_index_tombstones_deleted_file() {
+        let mut pipeline = make_pipeline();
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "# A\nHello").unwrap();
+        fs::write(dir.path().join("b.md"), "# B\nWorld").unwrap();
+
+        pipeline.bulk_index(dir.path()).unwrap();
+
+        // Delete one file
+        fs::remove_file(dir.path().join("a.md")).unwrap();
+
+        let r2 = pipeline.bulk_index(dir.path()).unwrap();
+        assert_eq!(r2.docs_indexed, 0);
+        assert_eq!(r2.docs_skipped, 1);
+        assert_eq!(r2.docs_tombstoned, 1);
+    }
+
+    #[test]
+    fn test_bulk_index_partial_vault_completes() {
+        let mut pipeline = make_pipeline();
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "# A\nHello").unwrap();
+
+        let r1 = pipeline.bulk_index(dir.path()).unwrap();
+        assert_eq!(r1.docs_indexed, 1);
+
+        // Add a new file
+        fs::write(dir.path().join("b.md"), "# B\nWorld").unwrap();
+
+        let r2 = pipeline.bulk_index(dir.path()).unwrap();
+        assert_eq!(r2.docs_indexed, 1);
+        assert_eq!(r2.docs_skipped, 1);
+    }
 }

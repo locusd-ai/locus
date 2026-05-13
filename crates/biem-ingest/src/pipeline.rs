@@ -52,9 +52,12 @@ pub struct IngestResult {
 }
 
 /// Result of a bulk indexing run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BulkIndexResult {
     pub docs_indexed: u32,
+    pub docs_updated: u32,
+    pub docs_skipped: u32,
+    pub docs_tombstoned: u32,
     pub bitmaps_created: u32,
     pub duration_ms: u64,
 }
@@ -366,65 +369,136 @@ impl IngestionPipeline {
 
     // ── Bulk indexing ────────────────────────────────────────────
 
-    /// Index all parseable files in a directory tree.
+    /// Index all parseable files in a directory tree (idempotent).
+    ///
+    /// - Files already indexed with the same hash are skipped.
+    /// - Files with a changed hash are updated (re-parsed, bitmaps diffed).
+    /// - New files are inserted.
+    /// - Files in the registry but no longer on disk are tombstoned.
     #[instrument(skip(self))]
     pub fn bulk_index(&mut self, root: &Path) -> Result<BulkIndexResult, IngestError> {
         let start = Instant::now();
         let source = SourceType::Obsidian;
 
-        // Collect all parseable files
+        // Collect all parseable files on disk
         let mut files: Vec<PathBuf> = Vec::new();
         Self::walk_dir(root, &mut files)?;
-
-        // Filter to parseable
         let parseable: Vec<PathBuf> = files
             .into_iter()
             .filter(|p| self.find_parser(p).is_some())
             .collect();
 
+        // Build a set of on-disk paths for tombstone detection
+        let on_disk: HashSet<PathBuf> = parseable.iter().cloned().collect();
+
+        // Build a lookup of existing registry docs by path
+        let existing_docs = self.registry.list_all_docs()?;
+        let mut existing_by_path: std::collections::HashMap<PathBuf, _> = existing_docs
+            .into_iter()
+            .map(|d| (d.file_path.clone(), d))
+            .collect();
+
         let mut docs_indexed = 0u32;
+        let mut docs_updated = 0u32;
+        let mut docs_skipped = 0u32;
+        let mut docs_tombstoned = 0u32;
         let mut all_bitmap_entries: std::collections::HashMap<BitmapKey, roaring::RoaringBitmap> =
             std::collections::HashMap::new();
 
         for path in &parseable {
             let content = fs::read(path)?;
             let hash = blake3::hash(&content);
+            let hash_bytes = *hash.as_bytes();
 
-            let parser = self.find_parser(path).expect("already filtered");
-            let result = parser.parse(path, &content)?;
+            if let Some(existing) = existing_by_path.remove(path) {
+                // Already registered
+                if existing.blake3_hash == hash_bytes {
+                    // Unchanged — skip, but still collect bitmap keys so bulk_put is correct
+                    let parser = self.find_parser(path).expect("already filtered");
+                    let result = parser.parse(path, &content)?;
+                    let keys = Self::bitmap_keys_for(path, &source, &result);
+                    for key in keys {
+                        all_bitmap_entries
+                            .entry(key)
+                            .or_insert_with(roaring::RoaringBitmap::new)
+                            .insert(existing.doc_id);
+                    }
+                    docs_skipped += 1;
+                } else {
+                    // Changed — update
+                    let parser = self.find_parser(path).expect("already filtered");
+                    let result = parser.parse(path, &content)?;
 
-            let doc_id = self.registry.insert_doc(NewDoc {
-                file_path: path.clone(),
-                source_type: source.clone(),
-                blake3_hash: *hash.as_bytes(),
-                auto_type: result.auto_type.clone(),
-            })?;
+                    self.registry.update_doc(existing.doc_id, hash_bytes, result.auto_type.clone())?;
+                    let chunks = Self::chunks_to_new(existing.doc_id, &result);
+                    self.registry.replace_chunks(existing.doc_id, chunks)?;
 
-            let chunks = Self::chunks_to_new(doc_id, &result);
-            self.registry.replace_chunks(doc_id, chunks)?;
+                    let keys = Self::bitmap_keys_for(path, &source, &result);
+                    for key in keys {
+                        all_bitmap_entries
+                            .entry(key)
+                            .or_insert_with(roaring::RoaringBitmap::new)
+                            .insert(existing.doc_id);
+                    }
+                    docs_updated += 1;
+                }
+            } else {
+                // New file — insert
+                let parser = self.find_parser(path).expect("already filtered");
+                let result = parser.parse(path, &content)?;
 
-            let keys = Self::bitmap_keys_for(path, &source, &result);
-            for key in keys {
-                all_bitmap_entries
-                    .entry(key)
-                    .or_insert_with(roaring::RoaringBitmap::new)
-                    .insert(doc_id);
+                let doc_id = self.registry.insert_doc(NewDoc {
+                    file_path: path.clone(),
+                    source_type: source.clone(),
+                    blake3_hash: hash_bytes,
+                    auto_type: result.auto_type.clone(),
+                })?;
+
+                let chunks = Self::chunks_to_new(doc_id, &result);
+                self.registry.replace_chunks(doc_id, chunks)?;
+
+                let keys = Self::bitmap_keys_for(path, &source, &result);
+                for key in keys {
+                    all_bitmap_entries
+                        .entry(key)
+                        .or_insert_with(roaring::RoaringBitmap::new)
+                        .insert(doc_id);
+                }
+                docs_indexed += 1;
             }
-
-            docs_indexed += 1;
         }
 
-        // Bulk put bitmaps
+        // Tombstone files that are in the registry but no longer on disk
+        // Only consider docs whose paths are under root (don't tombstone docs from other vaults)
+        for (path, doc) in &existing_by_path {
+            if path.starts_with(root) && !on_disk.contains(path) {
+                self.bitmap_store.tombstone(doc.doc_id)?;
+                // Remove from all bitmaps
+                let all_keys = self.bitmap_store.list_keys(None)?;
+                for key in &all_keys {
+                    let bm = self.bitmap_store.get(key)?;
+                    if bm.contains(doc.doc_id) {
+                        self.bitmap_store.remove_id(key, doc.doc_id)?;
+                    }
+                }
+                docs_tombstoned += 1;
+            }
+        }
+
+        // Bulk put bitmaps (merge with existing)
         let bitmaps_created = all_bitmap_entries.len() as u32;
         let entries: Vec<(BitmapKey, roaring::RoaringBitmap)> =
             all_bitmap_entries.into_iter().collect();
         self.bitmap_store.bulk_put(entries)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
-        info!(docs_indexed, bitmaps_created, duration_ms, "bulk index complete");
+        info!(docs_indexed, docs_updated, docs_skipped, docs_tombstoned, bitmaps_created, duration_ms, "bulk index complete");
 
         Ok(BulkIndexResult {
             docs_indexed,
+            docs_updated,
+            docs_skipped,
+            docs_tombstoned,
             bitmaps_created,
             duration_ms,
         })

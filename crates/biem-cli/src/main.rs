@@ -230,8 +230,9 @@ fn cmd_init(path: &PathBuf, local: bool) -> Result<()> {
     let result = pipeline.bulk_index(&vault_path)
         .context("initial index failed")?;
 
-    println!("✓ Indexed {} documents ({} bitmap keys, {}ms)",
-        result.docs_indexed, result.bitmaps_created, result.duration_ms);
+    println!("✓ Indexed {} documents ({} updated, {} skipped, {} tombstoned, {} bitmap keys, {}ms)",
+        result.docs_indexed, result.docs_updated, result.docs_skipped, result.docs_tombstoned,
+        result.bitmaps_created, result.duration_ms);
 
     Ok(())
 }
@@ -277,6 +278,7 @@ fn cmd_index(path: &PathBuf, cli: &Cli) -> Result<()> {
         .context("failed to index vault")?;
 
     println!("✓ Indexed {} documents", result.docs_indexed);
+    println!("  {} updated, {} skipped, {} tombstoned", result.docs_updated, result.docs_skipped, result.docs_tombstoned);
     println!("  {} bitmap keys created", result.bitmaps_created);
     println!("  {}ms elapsed", result.duration_ms);
 
