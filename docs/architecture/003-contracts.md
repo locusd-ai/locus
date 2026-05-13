@@ -372,6 +372,15 @@ pub trait BitmapStore: Send + Sync {
     /// Get the cardinality of a bitmap without deserializing the full bitmap.
     /// Falls back to deserialize + len() if format doesn't support it.
     fn cardinality(&self, key: &str) -> Result<u32, BitmapError>;
+
+    // --- Jaccard similarity ---
+
+    /// Compute Jaccard similarity between two bitmap keys: |A ∩ B| / |A ∪ B|.
+    /// Returns 0.0 if both bitmaps are empty, 1.0 if identical.
+    fn jaccard_keys(&self, key_a: &str, key_b: &str) -> Result<f64, BitmapError>;
+
+    /// Compute Jaccard similarity between two pre-loaded bitmaps.
+    fn jaccard_bitmaps(&self, a: &RoaringBitmap, b: &RoaringBitmap) -> f64;
 }
 
 #[derive(Debug, thiserror::Error)]
