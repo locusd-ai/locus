@@ -296,6 +296,9 @@ pub trait Registry: Send + Sync {
 
     // --- Global state ---
 
+    /// Get all documents in the registry (for idempotent bulk re-indexing).
+    fn list_all_docs(&self) -> Result<Vec<DocRecord>, RegistryError>;
+
     /// Get the current global state (next IDs, totals).
     fn get_global_state(&self) -> Result<GlobalState, RegistryError>;
 }
