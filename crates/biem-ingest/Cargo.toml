@@ -9,11 +9,32 @@ biem-core = { workspace = true }
 biem-parser = { workspace = true }
 biem-registry = { workspace = true }
 biem-bitmap = { workspace = true }
+biem-query = { workspace = true }
 blake3 = { workspace = true }
 roaring = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+tempfile = "3"
+duckdb = { workspace = true }
+petgraph = "0.7"
+
+[[bin]]
+name = "biem-scale-test"
+path = "src/bin/biem_scale_test.rs"
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { workspace = true }
+rand = { workspace = true }
+biem-core = { workspace = true }
+biem-parser = { workspace = true }
+biem-registry = { workspace = true }
+biem-bitmap = { workspace = true }
+biem-query = { workspace = true }
+
+[[bench]]
+name = "ingest_bench"
+harness = false
