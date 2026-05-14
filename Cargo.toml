@@ -12,6 +12,7 @@ members = [
     "crates/biem-daemon",
     "crates/biem-enrich",
     "crates/biem-embed",
+    "crates/biem-code",
 ]
 
 [workspace.package]
@@ -31,6 +32,7 @@ biem-watcher = { path = "crates/biem-watcher" }
 biem-query = { path = "crates/biem-query" }
 biem-enrich = { path = "crates/biem-enrich" }
 biem-embed = { path = "crates/biem-embed" }
+biem-code = { path = "crates/biem-code" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

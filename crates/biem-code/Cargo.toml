@@ -1,0 +1,15 @@
+[package]
+name = "biem-code"
+description = "Code parser — Tree-sitter AST chunking for code intelligence"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+biem-core = { workspace = true }
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

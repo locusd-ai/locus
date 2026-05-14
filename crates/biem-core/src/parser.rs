@@ -25,4 +25,6 @@ pub enum ParseError {
     BadFrontmatter(String),
     #[error("parser internal error: {0}")]
     Internal(String),
+    #[error("unsupported file type: {0}")]
+    Unsupported(String),
 }
