@@ -455,6 +455,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "biem-enrich"
+version = "0.1.0"
+dependencies = [
+ "biem-core",
+ "blake3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "biem-ingest"
 version = "0.1.0"
 dependencies = [
