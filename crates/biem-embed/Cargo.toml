@@ -1,0 +1,12 @@
+[package]
+name = "biem-embed"
+description = "Embedding and vector search for BIEM"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+biem-core = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

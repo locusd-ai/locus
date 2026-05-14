@@ -456,6 +456,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "biem-embed"
+version = "0.1.0"
+dependencies = [
+ "biem-core",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "biem-enrich"
 version = "0.1.0"
 dependencies = [
