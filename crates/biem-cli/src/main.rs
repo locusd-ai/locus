@@ -96,6 +96,14 @@ enum Commands {
     },
     /// List active taggers (builtin + custom)
     Taggers,
+    /// Re-run enrichment taggers on an indexed vault
+    Enrich {
+        /// Path to the vault directory
+        path: PathBuf,
+        /// Force re-run, ignoring tagger cache
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -115,6 +123,7 @@ fn main() -> Result<()> {
         Commands::Filters { ref category, ref vault } => cmd_filters(vault.as_ref(), category.clone(), &cli),
         Commands::Compact { ref vault } => cmd_compact(vault.as_ref(), &cli),
         Commands::Taggers => cmd_taggers(),
+        Commands::Enrich { ref path, force } => cmd_enrich(path, force, &cli),
     }
 }
 
@@ -478,6 +487,34 @@ fn cmd_compact(vault: Option<&PathBuf>, cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+fn cmd_enrich(path: &PathBuf, force: bool, cli: &Cli) -> Result<()> {
+    let data_dir = resolve_data_dir_for_vault(path, cli)?;
+    if !data_dir.exists() {
+        anyhow::bail!(
+            "data dir {} does not exist — run `biem init <vault>` first",
+            data_dir.display()
+        );
+    }
+
+    let (registry, bitmap_store) = open_persistent_stores(&data_dir)?;
+    let tag_pipeline = build_tag_pipeline(Some(&data_dir)).with_force(force);
+    let mut pipeline = IngestionPipeline::new(
+        vec![Box::new(MarkdownParser)],
+        registry,
+        bitmap_store,
+    ).with_tag_pipeline(tag_pipeline);
+
+    let result = pipeline.bulk_index(path.as_path())
+        .context("enrichment re-index failed")?;
+
+    println!("✓ Enrichment complete{}", if force { " (forced)" } else { "" });
+    println!("  {} documents processed ({} updated, {} skipped)",
+        result.docs_indexed, result.docs_updated, result.docs_skipped);
+    println!("  {} bitmap keys, {}ms elapsed", result.bitmaps_created, result.duration_ms);
+
+    Ok(())
+}
+
 /// Build the default tag pipeline with builtin taggers + any custom YAML taggers.
 fn build_tag_pipeline(data_dir: Option<&PathBuf>) -> TagPipeline {
     let mut taggers: Vec<Box<dyn biem_core::enrich::Tagger>> = vec![
@@ -526,6 +563,3 @@ fn cmd_taggers() -> Result<()> {
     Ok(())
 }
 
-fn hex(bytes: &[u8; 32]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join("")
-}

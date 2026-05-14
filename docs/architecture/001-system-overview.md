@@ -57,7 +57,7 @@ Key shift from v1: BIEM is a **pointer service**. It returns structured metadata
 
 ## 2. Module Decomposition (Revised)
 
-Seven modules, with clear separation between parsing and ingestion:
+Eight modules, with clear separation between parsing, enrichment, and ingestion:
 
 ```mermaid
 graph TB
@@ -72,7 +72,9 @@ graph TB
             P_OTHER["Other Parsers<br/>(future)"]
         end
 
-        INGEST["Ingestion Pipeline<br/>─────────<br/>hash → diff → route to parser<br/>→ update stores"]
+        ENRICH["Enrichment Pipeline<br/>─────────<br/>TagPipeline: builtin + custom taggers<br/>→ inferred bitmap keys (cached)"]
+
+        INGEST["Ingestion Pipeline<br/>─────────<br/>hash → diff → route to parser<br/>→ enrich → update stores"]
 
         BITMAP["Bitmap Store<br/>─────────<br/>LMDB + Roaring (portable)<br/>+ tombstone bitmap"]
 
@@ -86,6 +88,8 @@ graph TB
     WATCH --> INGEST
     INGEST --> Parsing
     Parsing --> INGEST
+    INGEST --> ENRICH
+    ENRICH --> INGEST
     INGEST --> REG
     INGEST --> BITMAP
     IFACE --> QUERY
@@ -99,6 +103,7 @@ graph TB
 |--------|-------|--------|------|
 | **Watcher** | fs events | `ChangeEvent { path, kind }` | Nothing persistent |
 | **Parser (trait)** | Raw file bytes + path | `ParseResult { frontmatter, chunks, links, tags, auto_type }` | Nothing — pure function |
+| **Enrichment** | `ParseResult` + content bytes | Inferred tags (e.g. `topic:auth`, `size:small`) | Tagger cache (filesystem) |
 | **Ingestion** | `ChangeEvent` | Writes to Registry + Bitmap Store | Diffing logic, BLAKE3 hashing |
 | **Registry** | CRUD operations | `DocRecord`, `ChunkRecord`, `BitmapCatalogEntry` | DuckDB |
 | **Bitmap Store** | key → bitmap ops | Roaring Bitmaps (serialized portable) | LMDB |

@@ -12,11 +12,18 @@ use biem_core::types::{ParseResult, SourceType, Timestamp};
 pub struct TagPipeline {
     taggers: Vec<Box<dyn Tagger>>,
     cache: Box<dyn TaggerCache>,
+    force: bool,
 }
 
 impl TagPipeline {
     pub fn new(taggers: Vec<Box<dyn Tagger>>, cache: Box<dyn TaggerCache>) -> Self {
-        Self { taggers, cache }
+        Self { taggers, cache, force: false }
+    }
+
+    /// Set force mode — skip cache on all enrichment calls.
+    pub fn with_force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
     }
 
     /// Compute a config hash that changes when the tagger set changes.
@@ -42,16 +49,18 @@ impl TagPipeline {
         let content_hash = blake3::hash(content).to_hex().to_string();
         let config_hash = self.config_hash();
 
-        // Check cache
-        if let Some(cached) = self.cache.get(&content_hash)? {
-            if cached.tagger_config_hash == config_hash {
-                let tags: Vec<String> = cached
-                    .results
-                    .iter()
-                    .flat_map(|r| r.tags.iter().cloned())
-                    .collect();
-                info!(tags = tags.len(), "cache hit");
-                return Ok(tags);
+        // Check cache (unless force mode)
+        if !self.force {
+            if let Some(cached) = self.cache.get(&content_hash)? {
+                if cached.tagger_config_hash == config_hash {
+                    let tags: Vec<String> = cached
+                        .results
+                        .iter()
+                        .flat_map(|r| r.tags.iter().cloned())
+                        .collect();
+                    info!(tags = tags.len(), "cache hit");
+                    return Ok(tags);
+                }
             }
         }
 

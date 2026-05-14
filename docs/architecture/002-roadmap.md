@@ -122,9 +122,20 @@ gantt
 
 ## Phase 2 — Semantic Layer (Follow-on)
 
-Add vector-based semantic search to complement the structural bitmap filtering.
+### Workstream 1: Enrichment Pipeline ✅
 
-### Planned Work
+Pluggable tagger system that produces inferred bitmap keys from parse results, with caching.
+
+- [x] Core types: `TaggerResult`, `EnrichmentCache`, `Tagger`/`TaggerCache` traits in `biem-core`
+- [x] `biem-enrich` crate with `TagPipeline` orchestrator
+- [x] `InMemoryTaggerCache` for tests, `FsTaggerCache` for persistence
+- [x] Builtin taggers: `SizeTagger`, `ConventionTagger`, `TopicTagger`, `ComplexityTagger`
+- [x] Custom YAML tagger loader with rule-based matching
+- [x] Integration into `IngestionPipeline` (optional, backwards compatible)
+- [x] CLI: `biem taggers`, `biem enrich [--force]`, enrichment in `biem init`/`biem index`
+- [x] Documentation: system overview and contracts updated
+
+### Remaining Phase 2 Work
 - [ ] Embedding model integration (BGE-M3 or Nomic-Embed)
 - [ ] Qdrant integration with Binary Quantization (RaBitQ)
 - [ ] Semantic scoring in QueryResult (`score` field)

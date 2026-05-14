@@ -3,7 +3,7 @@
 //! Each YAML file defines a tagger with match rules and tags to add.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use globset::{Glob, GlobMatcher};
 use serde::Deserialize;
