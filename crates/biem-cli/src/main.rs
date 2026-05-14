@@ -11,6 +11,7 @@ use biem_core::config::{self, StorageMode};
 use biem_core::query::{Filter, QueryEngine, QueryRequest};
 use biem_core::registry::Registry;
 use biem_core::semantic::Embedder;
+use biem_core::types::SourceType;
 use biem_embed::{FastEmbedEmbedder, UsearchVectorStore};
 use biem_enrich::builtin::{ComplexityTagger, ConventionTagger, SizeTagger, TopicTagger};
 use biem_enrich::{InMemoryTaggerCache, TagPipeline, FsTaggerCache, load_yaml_taggers};
@@ -151,8 +152,8 @@ fn resolve_data_dir(cli: &Cli) -> Result<PathBuf> {
     }
     // Try config: if exactly one vault registered, use it
     let cfg = config::load_config().unwrap_or_default();
-    if cfg.vaults.len() == 1 {
-        let entry = cfg.vaults.values().next().unwrap();
+    if cfg.sources.len() == 1 {
+        let entry = cfg.sources.values().next().unwrap();
         return Ok(entry.data_dir.clone());
     }
     // Fall back to legacy default ~/.biem/
@@ -167,7 +168,7 @@ fn resolve_data_dir_for_vault(vault_path: &PathBuf, cli: &Cli) -> Result<PathBuf
     }
     // Try config resolution
     let cfg = config::load_config().unwrap_or_default();
-    match config::resolve_vault(vault_path, &cfg) {
+    match config::resolve_source(vault_path, &cfg) {
         Ok(entry) => Ok(entry.data_dir),
         Err(_) => {
             // Fall back to legacy default
@@ -238,8 +239,8 @@ fn cmd_init(path: &PathBuf, local: bool) -> Result<()> {
 
     let storage = if local { StorageMode::Local } else { StorageMode::Global };
 
-    let (name, entry) = config::register_vault(&vault_path, storage, &biem_dir, &mut cfg)
-        .with_context(|| format!("failed to register vault: {}", vault_path.display()))?;
+    let (name, entry) = config::register_source(&vault_path, SourceType::Obsidian, storage, &biem_dir, &mut cfg)
+        .with_context(|| format!("failed to register source: {}", vault_path.display()))?;
 
     config::save_config(&cfg)
         .context("failed to save config")?;
@@ -270,13 +271,13 @@ fn cmd_init(path: &PathBuf, local: bool) -> Result<()> {
 fn cmd_config() -> Result<()> {
     let cfg = config::load_config().unwrap_or_default();
 
-    if cfg.vaults.is_empty() {
-        println!("No vaults registered. Run `biem init <vault>` to get started.");
+    if cfg.sources.is_empty() {
+        println!("No sources registered. Run `biem init <path>` to get started.");
         return Ok(());
     }
 
-    println!("Registered vaults:");
-    for (name, entry) in &cfg.vaults {
+    println!("Registered sources:");
+    for (name, entry) in &cfg.sources {
         println!();
         println!("  [{}]", name);
         println!("    path:     {}", entry.path.display());

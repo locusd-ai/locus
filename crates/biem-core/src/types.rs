@@ -21,7 +21,8 @@ pub type Timestamp = i64;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceType {
     Obsidian,
-    // Future: Code, Confluence, etc.
+    Code,
+    // Future: Confluence, etc.
 }
 
 /// Auto-detected note type based on structural analysis.

@@ -1,6 +1,6 @@
-//! Configuration and vault registration for BIEM.
+//! Configuration and source registration for BIEM.
 //!
-//! Global config lives at `~/.biem/config.toml`. Each registered vault
+//! Global config lives at `~/.biem/config.toml`. Each registered source
 //! gets its own state directory containing registry (DuckDB) and bitmaps (LMDB).
 
 use std::collections::BTreeMap;
@@ -8,21 +8,40 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::SourceType;
+
 // ── Types ────────────────────────────────────────────────────────
 
 /// Top-level BIEM configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct BiemConfig {
-    /// Registered vaults, keyed by a human-friendly name.
+    /// Registered sources, keyed by a human-friendly name.
     #[serde(default)]
-    pub vaults: BTreeMap<String, VaultEntry>,
+    pub sources: BTreeMap<String, SourceEntry>,
+
+    // Legacy alias: deserialize old configs that use "vaults"
+    #[serde(default, rename = "vaults")]
+    #[serde(skip_serializing)]
+    vaults_compat: BTreeMap<String, SourceEntry>,
 }
 
-/// A registered vault entry.
+impl BiemConfig {
+    /// Merge legacy `vaults` entries into `sources` (for config migration).
+    pub fn migrate_legacy(&mut self) {
+        for (k, v) in std::mem::take(&mut self.vaults_compat) {
+            self.sources.entry(k).or_insert(v);
+        }
+    }
+}
+
+/// A registered source entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct VaultEntry {
-    /// Canonical absolute path to the vault root.
+pub struct SourceEntry {
+    /// Canonical absolute path to the source root.
     pub path: PathBuf,
+    /// The type of content at this path.
+    #[serde(default)]
+    pub source_type: SourceTypeConfig,
     /// Where state is stored.
     #[serde(default)]
     pub storage: StorageMode,
@@ -30,14 +49,41 @@ pub struct VaultEntry {
     pub data_dir: PathBuf,
 }
 
-/// Where to store BIEM state for a vault.
+/// Source type for config serialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceTypeConfig {
+    #[default]
+    Obsidian,
+    Code,
+}
+
+impl From<SourceTypeConfig> for SourceType {
+    fn from(c: SourceTypeConfig) -> Self {
+        match c {
+            SourceTypeConfig::Obsidian => SourceType::Obsidian,
+            SourceTypeConfig::Code => SourceType::Code,
+        }
+    }
+}
+
+impl From<SourceType> for SourceTypeConfig {
+    fn from(s: SourceType) -> Self {
+        match s {
+            SourceType::Obsidian => SourceTypeConfig::Obsidian,
+            SourceType::Code => SourceTypeConfig::Code,
+        }
+    }
+}
+
+/// Where to store BIEM state for a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageMode {
-    /// State in `~/.biem/vaults/<hash>/` (default).
+    /// State in `~/.biem/sources/<name>/` (default).
     #[default]
     Global,
-    /// State in `<vault>/.biem/`.
+    /// State in `<source>/.biem/`.
     Local,
 }
 
@@ -53,10 +99,10 @@ pub enum ConfigError {
     TomlWrite(#[from] toml::ser::Error),
     #[error("home directory not found")]
     NoHomeDir,
-    #[error("vault not registered: {0}")]
-    VaultNotFound(String),
-    #[error("vault already registered as '{0}'")]
-    VaultAlreadyRegistered(String),
+    #[error("source not registered: {0}")]
+    SourceNotFound(String),
+    #[error("source already registered as '{0}'")]
+    SourceAlreadyRegistered(String),
 }
 
 // ── Functions ────────────────────────────────────────────────────
@@ -74,7 +120,8 @@ pub fn load_config_from(config_dir: &Path) -> Result<BiemConfig, ConfigError> {
         return Ok(BiemConfig::default());
     }
     let contents = std::fs::read_to_string(&path)?;
-    let config: BiemConfig = toml::from_str(&contents)?;
+    let mut config: BiemConfig = toml::from_str(&contents)?;
+    config.migrate_legacy();
     Ok(config)
 }
 
@@ -97,107 +144,141 @@ pub fn save_config(config: &BiemConfig) -> Result<(), ConfigError> {
     save_config_to(config, &default_config_dir()?)
 }
 
-/// Compute a deterministic short hash of a vault path for use as a directory name.
+/// Compute a deterministic short hash of a source path for use as a directory name.
 /// Uses blake3, truncated to 12 hex chars.
-pub fn vault_hash(vault_path: &Path) -> String {
-    let hash = blake3::hash(vault_path.to_string_lossy().as_bytes());
+pub fn source_hash(source_path: &Path) -> String {
+    let hash = blake3::hash(source_path.to_string_lossy().as_bytes());
     hash.to_hex()[..12].to_string()
 }
 
-/// Derive a human-friendly vault name from the directory name.
-fn derive_vault_name(vault_path: &Path) -> String {
-    vault_path
+/// Derive a human-friendly source name from the directory name.
+fn derive_source_name(source_path: &Path) -> String {
+    source_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| vault_hash(vault_path))
+        .unwrap_or_else(|| source_hash(source_path))
 }
 
-/// Ensure the vault name is unique in the config, appending a suffix if needed.
-fn unique_vault_name(base: &str, config: &BiemConfig) -> String {
-    if !config.vaults.contains_key(base) {
+/// Ensure the source name is unique in the config, appending a suffix if needed.
+fn unique_source_name(base: &str, config: &BiemConfig) -> String {
+    if !config.sources.contains_key(base) {
         return base.to_string();
     }
     for i in 2.. {
         let candidate = format!("{base}-{i}");
-        if !config.vaults.contains_key(&candidate) {
+        if !config.sources.contains_key(&candidate) {
             return candidate;
         }
     }
     unreachable!()
 }
 
-/// Register a vault in the config. Creates the state directory.
+/// Register a source in the config. Creates the state directory.
 /// `biem_dir` is the root BIEM config dir (e.g. `~/.biem/`), used for global storage.
-pub fn register_vault(
-    vault_path: &Path,
+pub fn register_source(
+    source_path: &Path,
+    source_type: SourceType,
     storage: StorageMode,
     biem_dir: &Path,
     config: &mut BiemConfig,
-) -> Result<(String, VaultEntry), ConfigError> {
-    let canonical = vault_path.canonicalize().map_err(ConfigError::Io)?;
+) -> Result<(String, SourceEntry), ConfigError> {
+    let canonical = source_path.canonicalize().map_err(ConfigError::Io)?;
 
     // Check if already registered
-    for (name, entry) in &config.vaults {
+    for (name, entry) in &config.sources {
         if entry.path == canonical {
-            return Err(ConfigError::VaultAlreadyRegistered(name.clone()));
+            return Err(ConfigError::SourceAlreadyRegistered(name.clone()));
         }
     }
 
+    let name = unique_source_name(&derive_source_name(&canonical), config);
+
     let data_dir = match storage {
-        StorageMode::Global => {
-            let hash = vault_hash(&canonical);
-            biem_dir.join("vaults").join(hash)
-        }
+        StorageMode::Global => biem_dir.join("sources").join(&name),
         StorageMode::Local => canonical.join(".biem"),
     };
 
     std::fs::create_dir_all(&data_dir)?;
 
-    let name = unique_vault_name(&derive_vault_name(&canonical), config);
-    let entry = VaultEntry {
+    let entry = SourceEntry {
         path: canonical,
+        source_type: source_type.into(),
         storage,
         data_dir,
     };
 
-    config.vaults.insert(name.clone(), entry.clone());
+    config.sources.insert(name.clone(), entry.clone());
     Ok((name, entry))
 }
 
-/// Find a vault entry by its path (canonicalized).
-pub fn resolve_vault(vault_path: &Path, config: &BiemConfig) -> Result<VaultEntry, ConfigError> {
-    let canonical = vault_path.canonicalize().map_err(ConfigError::Io)?;
+/// Find a source entry by its path (canonicalized).
+pub fn resolve_source(source_path: &Path, config: &BiemConfig) -> Result<SourceEntry, ConfigError> {
+    let canonical = source_path.canonicalize().map_err(ConfigError::Io)?;
 
-    for entry in config.vaults.values() {
+    for entry in config.sources.values() {
         if entry.path == canonical {
             return Ok(entry.clone());
         }
     }
 
-    Err(ConfigError::VaultNotFound(
+    Err(ConfigError::SourceNotFound(
         canonical.to_string_lossy().into_owned(),
     ))
 }
 
-/// Remove a vault from the config by path. Does NOT delete the state directory.
-pub fn remove_vault(vault_path: &Path, config: &mut BiemConfig) -> Result<String, ConfigError> {
-    let canonical = vault_path.canonicalize().map_err(ConfigError::Io)?;
+/// Remove a source from the config by path. Does NOT delete the state directory.
+pub fn remove_source(source_path: &Path, config: &mut BiemConfig) -> Result<String, ConfigError> {
+    let canonical = source_path.canonicalize().map_err(ConfigError::Io)?;
 
     let name = config
-        .vaults
+        .sources
         .iter()
         .find(|(_, entry)| entry.path == canonical)
         .map(|(name, _)| name.clone());
 
     match name {
         Some(n) => {
-            config.vaults.remove(&n);
+            config.sources.remove(&n);
             Ok(n)
         }
-        None => Err(ConfigError::VaultNotFound(
+        None => Err(ConfigError::SourceNotFound(
             canonical.to_string_lossy().into_owned(),
         )),
     }
+}
+
+// ── Backwards compatibility ──────────────────────────────────────
+
+/// Legacy type alias.
+pub type VaultEntry = SourceEntry;
+
+/// Legacy alias — delegates to `register_source` with `SourceType::Obsidian`.
+#[deprecated(note = "Use register_source instead")]
+pub fn register_vault(
+    vault_path: &Path,
+    storage: StorageMode,
+    biem_dir: &Path,
+    config: &mut BiemConfig,
+) -> Result<(String, SourceEntry), ConfigError> {
+    register_source(vault_path, SourceType::Obsidian, storage, biem_dir, config)
+}
+
+/// Legacy alias — delegates to `resolve_source`.
+#[deprecated(note = "Use resolve_source instead")]
+pub fn resolve_vault(vault_path: &Path, config: &BiemConfig) -> Result<SourceEntry, ConfigError> {
+    resolve_source(vault_path, config)
+}
+
+/// Legacy alias — delegates to `remove_source`.
+#[deprecated(note = "Use remove_source instead")]
+pub fn remove_vault(vault_path: &Path, config: &mut BiemConfig) -> Result<String, ConfigError> {
+    remove_source(vault_path, config)
+}
+
+/// Legacy alias for source_hash.
+#[deprecated(note = "Use source_hash instead")]
+pub fn vault_hash(vault_path: &Path) -> String {
+    source_hash(vault_path)
 }
 
 // ── Tests ────────────────────────────────────────────────────────
@@ -207,17 +288,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_vault_hash_deterministic() {
-        let h1 = vault_hash(Path::new("/foo/bar"));
-        let h2 = vault_hash(Path::new("/foo/bar"));
+    fn test_source_hash_deterministic() {
+        let h1 = source_hash(Path::new("/foo/bar"));
+        let h2 = source_hash(Path::new("/foo/bar"));
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 12);
     }
 
     #[test]
-    fn test_vault_hash_different_paths() {
-        let h1 = vault_hash(Path::new("/foo/bar"));
-        let h2 = vault_hash(Path::new("/foo/baz"));
+    fn test_source_hash_different_paths() {
+        let h1 = source_hash(Path::new("/foo/bar"));
+        let h2 = source_hash(Path::new("/foo/baz"));
         assert_ne!(h1, h2);
     }
 
@@ -225,17 +306,18 @@ mod tests {
     fn test_load_missing_config_returns_default() {
         let tmp = tempfile::tempdir().unwrap();
         let config = load_config_from(tmp.path()).unwrap();
-        assert!(config.vaults.is_empty());
+        assert!(config.sources.is_empty());
     }
 
     #[test]
     fn test_save_and_load_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = BiemConfig::default();
-        config.vaults.insert(
+        config.sources.insert(
             "test".into(),
-            VaultEntry {
+            SourceEntry {
                 path: PathBuf::from("/tmp/vault"),
+                source_type: SourceTypeConfig::Obsidian,
                 storage: StorageMode::Global,
                 data_dir: PathBuf::from("/tmp/state"),
             },
@@ -246,33 +328,33 @@ mod tests {
     }
 
     #[test]
-    fn test_register_vault_global() {
+    fn test_register_source_global() {
         let biem_dir = tempfile::tempdir().unwrap();
-        let vault = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
         let mut config = BiemConfig::default();
 
         let (name, entry) =
-            register_vault(vault.path(), StorageMode::Global, biem_dir.path(), &mut config)
+            register_source(source.path(), SourceType::Obsidian, StorageMode::Global, biem_dir.path(), &mut config)
                 .unwrap();
 
         assert!(!name.is_empty());
         assert_eq!(entry.storage, StorageMode::Global);
-        assert!(entry.data_dir.starts_with(biem_dir.path().join("vaults")));
+        assert!(entry.data_dir.starts_with(biem_dir.path().join("sources")));
         assert!(entry.data_dir.exists());
     }
 
     #[test]
-    fn test_register_vault_local() {
+    fn test_register_source_local() {
         let biem_dir = tempfile::tempdir().unwrap();
-        let vault = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
         let mut config = BiemConfig::default();
 
         let (_name, entry) =
-            register_vault(vault.path(), StorageMode::Local, biem_dir.path(), &mut config)
+            register_source(source.path(), SourceType::Obsidian, StorageMode::Local, biem_dir.path(), &mut config)
                 .unwrap();
 
         assert_eq!(entry.storage, StorageMode::Local);
-        let canonical = vault.path().canonicalize().unwrap();
+        let canonical = source.path().canonicalize().unwrap();
         assert_eq!(entry.data_dir, canonical.join(".biem"));
         assert!(entry.data_dir.exists());
     }
@@ -280,74 +362,101 @@ mod tests {
     #[test]
     fn test_register_duplicate_errors() {
         let biem_dir = tempfile::tempdir().unwrap();
-        let vault = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
         let mut config = BiemConfig::default();
 
-        register_vault(vault.path(), StorageMode::Global, biem_dir.path(), &mut config).unwrap();
+        register_source(source.path(), SourceType::Obsidian, StorageMode::Global, biem_dir.path(), &mut config).unwrap();
         let err =
-            register_vault(vault.path(), StorageMode::Global, biem_dir.path(), &mut config)
+            register_source(source.path(), SourceType::Obsidian, StorageMode::Global, biem_dir.path(), &mut config)
                 .unwrap_err();
-        assert!(matches!(err, ConfigError::VaultAlreadyRegistered(_)));
+        assert!(matches!(err, ConfigError::SourceAlreadyRegistered(_)));
     }
 
     #[test]
-    fn test_resolve_vault() {
+    fn test_resolve_source() {
         let biem_dir = tempfile::tempdir().unwrap();
-        let vault = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
         let mut config = BiemConfig::default();
 
         let (_name, expected) =
-            register_vault(vault.path(), StorageMode::Global, biem_dir.path(), &mut config)
+            register_source(source.path(), SourceType::Obsidian, StorageMode::Global, biem_dir.path(), &mut config)
                 .unwrap();
-        let resolved = resolve_vault(vault.path(), &config).unwrap();
+        let resolved = resolve_source(source.path(), &config).unwrap();
         assert_eq!(resolved.data_dir, expected.data_dir);
     }
 
     #[test]
-    fn test_resolve_unknown_vault_errors() {
-        let vault = tempfile::tempdir().unwrap();
+    fn test_resolve_unknown_source_errors() {
+        let source = tempfile::tempdir().unwrap();
         let config = BiemConfig::default();
-        let err = resolve_vault(vault.path(), &config).unwrap_err();
-        assert!(matches!(err, ConfigError::VaultNotFound(_)));
+        let err = resolve_source(source.path(), &config).unwrap_err();
+        assert!(matches!(err, ConfigError::SourceNotFound(_)));
     }
 
     #[test]
-    fn test_remove_vault() {
+    fn test_remove_source() {
         let biem_dir = tempfile::tempdir().unwrap();
-        let vault = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
         let mut config = BiemConfig::default();
 
-        register_vault(vault.path(), StorageMode::Global, biem_dir.path(), &mut config).unwrap();
-        assert_eq!(config.vaults.len(), 1);
-        remove_vault(vault.path(), &mut config).unwrap();
-        assert!(config.vaults.is_empty());
+        register_source(source.path(), SourceType::Obsidian, StorageMode::Global, biem_dir.path(), &mut config).unwrap();
+        assert_eq!(config.sources.len(), 1);
+        remove_source(source.path(), &mut config).unwrap();
+        assert!(config.sources.is_empty());
     }
 
     #[test]
     fn test_full_round_trip() {
         let biem_dir = tempfile::tempdir().unwrap();
-        let vault = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
         let mut config = BiemConfig::default();
 
-        register_vault(vault.path(), StorageMode::Global, biem_dir.path(), &mut config).unwrap();
+        register_source(source.path(), SourceType::Obsidian, StorageMode::Global, biem_dir.path(), &mut config).unwrap();
         save_config_to(&config, biem_dir.path()).unwrap();
 
         let loaded = load_config_from(biem_dir.path()).unwrap();
-        let resolved = resolve_vault(vault.path(), &loaded).unwrap();
+        let resolved = resolve_source(source.path(), &loaded).unwrap();
         assert!(resolved.data_dir.exists());
     }
 
     #[test]
     fn test_unique_name_dedup() {
         let biem_dir = tempfile::tempdir().unwrap();
-        let vault1 = tempfile::Builder::new().prefix("my-vault").tempdir().unwrap();
-        let vault2 = tempfile::Builder::new().prefix("my-vault").tempdir().unwrap();
+        let s1 = tempfile::Builder::new().prefix("my-source").tempdir().unwrap();
+        let s2 = tempfile::Builder::new().prefix("my-source").tempdir().unwrap();
         let mut config = BiemConfig::default();
 
-        let (n1, _) = register_vault(vault1.path(), StorageMode::Global, biem_dir.path(), &mut config).unwrap();
-        let (n2, _) = register_vault(vault2.path(), StorageMode::Global, biem_dir.path(), &mut config).unwrap();
+        let (n1, _) = register_source(s1.path(), SourceType::Obsidian, StorageMode::Global, biem_dir.path(), &mut config).unwrap();
+        let (n2, _) = register_source(s2.path(), SourceType::Obsidian, StorageMode::Global, biem_dir.path(), &mut config).unwrap();
 
         assert_ne!(n1, n2);
-        assert_eq!(config.vaults.len(), 2);
+        assert_eq!(config.sources.len(), 2);
+    }
+
+    #[test]
+    fn test_register_code_source() {
+        let biem_dir = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let mut config = BiemConfig::default();
+
+        let (_name, entry) =
+            register_source(source.path(), SourceType::Code, StorageMode::Global, biem_dir.path(), &mut config)
+                .unwrap();
+
+        assert_eq!(entry.source_type, SourceTypeConfig::Code);
+    }
+
+    #[test]
+    fn test_legacy_vaults_config_migration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let toml_content = r#"
+[vaults.old-vault]
+path = "/tmp/old-vault"
+storage = "global"
+data_dir = "/tmp/state"
+"#;
+        std::fs::write(tmp.path().join("config.toml"), toml_content).unwrap();
+        let config = load_config_from(tmp.path()).unwrap();
+        assert!(config.sources.contains_key("old-vault"));
     }
 }

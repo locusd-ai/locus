@@ -114,11 +114,13 @@ impl DuckDbRegistry {
     fn source_type_to_str(st: &SourceType) -> &'static str {
         match st {
             SourceType::Obsidian => "obsidian",
+            SourceType::Code => "code",
         }
     }
 
     fn str_to_source_type(s: &str) -> SourceType {
         match s {
+            "code" => SourceType::Code,
             _ => SourceType::Obsidian,
         }
     }

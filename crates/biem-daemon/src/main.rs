@@ -240,7 +240,7 @@ fn resolve_daemon_data_dir(cli: &Cli, vault: &PathBuf) -> Result<PathBuf> {
         return Ok(dir.clone());
     }
     let cfg = biem_core::config::load_config().unwrap_or_default();
-    match biem_core::config::resolve_vault(vault, &cfg) {
+    match biem_core::config::resolve_source(vault, &cfg) {
         Ok(entry) => Ok(entry.data_dir),
         Err(_) => {
             let home = std::env::var("HOME").context("HOME not set")?;

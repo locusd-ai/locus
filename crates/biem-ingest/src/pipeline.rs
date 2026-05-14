@@ -172,6 +172,7 @@ impl IngestionPipeline {
     fn source_key(source_type: &SourceType) -> BitmapKey {
         let label = match source_type {
             SourceType::Obsidian => "obsidian",
+            SourceType::Code => "code",
         };
         format!("source:{label}")
     }
