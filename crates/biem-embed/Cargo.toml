@@ -8,10 +8,12 @@ edition.workspace = true
 biem-core = { workspace = true }
 tracing = { workspace = true }
 fastembed = { workspace = true, optional = true }
+usearch = { workspace = true, optional = true }
 
 [features]
-default = ["fastembed-embedder"]
+default = ["fastembed-embedder", "usearch-store"]
 fastembed-embedder = ["dep:fastembed"]
+usearch-store = ["dep:usearch"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
