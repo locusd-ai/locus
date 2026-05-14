@@ -10,6 +10,7 @@ use biem_core::parser::{ParseError, Parser};
 use biem_core::registry::{
     NewChunk, NewDoc, Registry, RegistryError,
 };
+use biem_core::semantic::{Embedder, VectorStore};
 use biem_core::types::{
     BitmapKey, ChangeEvent, ChangeKind, DocId, NoteType,
     ParseResult, SourceType,
@@ -79,6 +80,8 @@ pub struct IngestionPipeline {
     registry: Box<dyn Registry>,
     bitmap_store: Box<dyn BitmapStore>,
     tag_pipeline: Option<TagPipeline>,
+    embedder: Option<Box<dyn Embedder>>,
+    vector_store: Option<Box<dyn VectorStore>>,
 }
 
 impl IngestionPipeline {
@@ -92,6 +95,8 @@ impl IngestionPipeline {
             registry,
             bitmap_store,
             tag_pipeline: None,
+            embedder: None,
+            vector_store: None,
         }
     }
 
@@ -101,9 +106,28 @@ impl IngestionPipeline {
         self
     }
 
+    /// Set the embedder and vector store. If set, chunk embeddings are generated during ingestion.
+    pub fn with_embedder(mut self, embedder: Box<dyn Embedder>, vector_store: Box<dyn VectorStore>) -> Self {
+        self.embedder = Some(embedder);
+        self.vector_store = Some(vector_store);
+        self
+    }
+
     /// Decompose the pipeline into its owned parts for handoff (e.g. to a query engine).
     pub fn into_parts(self) -> (Vec<Box<dyn Parser>>, Box<dyn Registry>, Box<dyn BitmapStore>) {
         (self.parsers, self.registry, self.bitmap_store)
+    }
+
+    /// Decompose including the optional vector store.
+    pub fn into_parts_with_vectors(
+        self,
+    ) -> (
+        Vec<Box<dyn Parser>>,
+        Box<dyn Registry>,
+        Box<dyn BitmapStore>,
+        Option<Box<dyn VectorStore>>,
+    ) {
+        (self.parsers, self.registry, self.bitmap_store, self.vector_store)
     }
 
     /// Find the first parser that can handle the given path.
@@ -200,6 +224,47 @@ impl IngestionPipeline {
 
     // ── Chunk conversion helper ──────────────────────────────────
 
+    /// Embed chunks for a document if embedder is configured.
+    /// chunk_ids must be in the same order as result.chunks.
+    fn embed_chunks(
+        &self,
+        content: &[u8],
+        result: &ParseResult,
+        chunk_ids: &[u32],
+    ) {
+        let (Some(embedder), Some(vs)) = (&self.embedder, &self.vector_store) else {
+            return;
+        };
+
+        // Extract text for each chunk from byte ranges
+        let texts: Vec<String> = result
+            .chunks
+            .iter()
+            .map(|c| {
+                let start = c.byte_range.start.min(content.len());
+                let end = c.byte_range.end.min(content.len());
+                String::from_utf8_lossy(&content[start..end]).to_string()
+            })
+            .collect();
+
+        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+
+        match embedder.embed(&text_refs) {
+            Ok(vectors) => {
+                for (i, vec) in vectors.iter().enumerate() {
+                    if i < chunk_ids.len() {
+                        if let Err(e) = vs.upsert(chunk_ids[i], vec) {
+                            warn!(chunk_id = chunk_ids[i], error = %e, "failed to upsert embedding");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to embed chunks");
+            }
+        }
+    }
+
     fn chunks_to_new(doc_id: DocId, result: &ParseResult) -> Vec<NewChunk> {
         result
             .chunks
@@ -255,6 +320,11 @@ impl IngestionPipeline {
             self.bitmap_store.insert_id(key, doc_id)?;
             updated += 1;
         }
+
+        // Embed chunks if embedder configured
+        let chunk_ids: Vec<u32> = self.registry.get_chunks(doc_id)?
+            .iter().map(|c| c.chunk_id).collect();
+        self.embed_chunks(&content, &result, &chunk_ids);
 
         info!(doc_id, bitmaps = updated, "indexed new document");
         Ok(IngestResult {
@@ -334,6 +404,11 @@ impl IngestionPipeline {
         let chunks = Self::chunks_to_new(doc_record.doc_id, &result);
         self.registry.replace_chunks(doc_record.doc_id, chunks)?;
 
+        // Re-embed chunks
+        let chunk_ids: Vec<u32> = self.registry.get_chunks(doc_record.doc_id)?
+            .iter().map(|c| c.chunk_id).collect();
+        self.embed_chunks(&content, &result, &chunk_ids);
+
         let updated = (removed.len() + added.len()) as u32;
         info!(doc_id = doc_record.doc_id, bitmaps = updated, "updated document");
         Ok(IngestResult {
@@ -352,6 +427,15 @@ impl IngestionPipeline {
 
         // Tombstone the doc
         self.bitmap_store.tombstone(doc_id)?;
+
+        // Delete chunk vectors if vector store configured
+        if let Some(ref vs) = self.vector_store {
+            if let Ok(chunks) = self.registry.get_chunks(doc_id) {
+                for c in &chunks {
+                    let _ = vs.delete(c.chunk_id);
+                }
+            }
+        }
 
         // Remove from all bitmaps that contain this doc_id
         let all_keys = self.bitmap_store.list_keys(None)?;
@@ -467,6 +551,11 @@ impl IngestionPipeline {
                     let chunks = Self::chunks_to_new(existing.doc_id, &result);
                     self.registry.replace_chunks(existing.doc_id, chunks)?;
 
+                    // Re-embed changed chunks
+                    let chunk_ids: Vec<u32> = self.registry.get_chunks(existing.doc_id)?
+                        .iter().map(|c| c.chunk_id).collect();
+                    self.embed_chunks(&content, &result, &chunk_ids);
+
                     let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
                     for key in keys {
                         all_bitmap_entries
@@ -490,6 +579,11 @@ impl IngestionPipeline {
 
                 let chunks = Self::chunks_to_new(doc_id, &result);
                 self.registry.replace_chunks(doc_id, chunks)?;
+
+                // Embed new chunks
+                let chunk_ids: Vec<u32> = self.registry.get_chunks(doc_id)?
+                    .iter().map(|c| c.chunk_id).collect();
+                self.embed_chunks(&content, &result, &chunk_ids);
 
                 let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
                 for key in keys {
