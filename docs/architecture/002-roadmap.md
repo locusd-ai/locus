@@ -135,11 +135,23 @@ Pluggable tagger system that produces inferred bitmap keys from parse results, w
 - [x] CLI: `biem taggers`, `biem enrich [--force]`, enrichment in `biem init`/`biem index`
 - [x] Documentation: system overview and contracts updated
 
+### Workstream 2: Semantic Layer (Vectors) ✅
+
+Vector-based semantic search as complement to bitmap filtering. Bitmaps pre-filter, vectors rank by similarity.
+
+- [x] Core types: `EmbeddingVector`, `ScoredPointer`, `SemanticQueryRequest/Result` in `biem-core`
+- [x] Traits: `Embedder`, `VectorStore`, `Reranker` in `biem-core/src/semantic.rs`
+- [x] `biem-embed` crate with `InMemoryVectorStore`, `FastEmbedEmbedder`, `UsearchVectorStore`
+- [x] Embedding generation integrated into `IngestionPipeline` (optional, backwards compatible)
+- [x] `BitmapQueryEngine::semantic_query()` — bitmap pre-filter → vector `search_within`
+- [x] CLI: `biem semantic "query" --filter tag:X` command
+- [x] Documentation: system overview and contracts updated
+
 ### Remaining Phase 2 Work
-- [ ] Embedding model integration (BGE-M3 or Nomic-Embed)
-- [ ] Qdrant integration with Binary Quantization (RaBitQ)
-- [ ] Semantic scoring in QueryResult (`score` field)
-- [ ] Query Engine: pass bitmap result mask to vector search
+- [x] Embedding model integration (FastEmbed BGE-small-en-v1.5, local ONNX)
+- [x] Vector store integration (USearch HNSW, persistent on-disk)
+- [x] Semantic scoring in QueryResult (`ScoredPointer` with cosine similarity)
+- [x] Query Engine: bitmap pre-filter → vector search within matching chunks
 - [ ] Re-ranker integration (MiniLM or BGE-Reranker)
 - [ ] Benchmarks: latency and recall vs pure bitmap search
 

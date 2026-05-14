@@ -74,13 +74,17 @@ graph TB
 
         ENRICH["Enrichment Pipeline<br/>─────────<br/>TagPipeline: builtin + custom taggers<br/>→ inferred bitmap keys (cached)"]
 
-        INGEST["Ingestion Pipeline<br/>─────────<br/>hash → diff → route to parser<br/>→ enrich → update stores"]
+        INGEST["Ingestion Pipeline<br/>─────────<br/>hash → diff → route to parser<br/>→ enrich → embed → update stores"]
 
         BITMAP["Bitmap Store<br/>─────────<br/>LMDB + Roaring (portable)<br/>+ tombstone bitmap"]
 
         REG["Registry<br/>─────────<br/>DuckDB<br/>IDs, paths, hashes,<br/>chunk metadata, bitmap catalog"]
 
-        QUERY["Query Engine<br/>─────────<br/>filter resolution<br/>→ bitmap intersection<br/>→ metadata assembly"]
+        EMBED["Embedding Layer<br/>─────────<br/>FastEmbed (local ONNX)<br/>→ chunk embeddings"]
+
+        VECTOR["Vector Store<br/>─────────<br/>USearch (HNSW)<br/>→ cosine similarity search"]
+
+        QUERY["Query Engine<br/>─────────<br/>filter resolution<br/>→ bitmap intersection<br/>→ optional vector rerank<br/>→ metadata assembly"]
 
         IFACE["Interface Layer<br/>─────────<br/>MCP Server │ HTTP API │ CLI"]
     end
@@ -92,9 +96,12 @@ graph TB
     ENRICH --> INGEST
     INGEST --> REG
     INGEST --> BITMAP
+    INGEST --> EMBED
+    EMBED --> VECTOR
     IFACE --> QUERY
     QUERY --> BITMAP
     QUERY --> REG
+    QUERY --> VECTOR
 ```
 
 ### Module contracts summary
@@ -104,10 +111,12 @@ graph TB
 | **Watcher** | fs events | `ChangeEvent { path, kind }` | Nothing persistent |
 | **Parser (trait)** | Raw file bytes + path | `ParseResult { frontmatter, chunks, links, tags, auto_type }` | Nothing — pure function |
 | **Enrichment** | `ParseResult` + content bytes | Inferred tags (e.g. `topic:auth`, `size:small`) | Tagger cache (filesystem) |
-| **Ingestion** | `ChangeEvent` | Writes to Registry + Bitmap Store | Diffing logic, BLAKE3 hashing |
+| **Embedding** | Chunk text | `EmbeddingVector` (f32 dense vectors) | Model cache (`~/.cache/fastembed/`) |
+| **Ingestion** | `ChangeEvent` | Writes to Registry + Bitmap Store + Vector Store | Diffing logic, BLAKE3 hashing |
 | **Registry** | CRUD operations | `DocRecord`, `ChunkRecord`, `BitmapCatalogEntry` | DuckDB |
 | **Bitmap Store** | key → bitmap ops | Roaring Bitmaps (serialized portable) | LMDB |
-| **Query Engine** | `QueryRequest { filters, limit }` | `QueryResult { matches: [MatchPointer] }` | Query planning |
+| **Vector Store** | chunk_id → vector ops | Cosine similarity results | USearch (HNSW) |
+| **Query Engine** | `QueryRequest` / `SemanticQueryRequest` | `QueryResult` / `SemanticQueryResult` | Query planning, bitmap→vector scoping |
 | **Interface Layer** | Protocol-specific requests | Protocol-specific responses | MCP/HTTP/CLI translation |
 
 ---
