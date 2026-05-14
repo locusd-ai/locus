@@ -406,6 +406,7 @@ dependencies = [
  "anyhow",
  "biem-bitmap",
  "biem-core",
+ "biem-enrich",
  "biem-ingest",
  "biem-parser",
  "biem-query",

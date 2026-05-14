@@ -10,6 +10,8 @@ use biem_core::bitmap::BitmapStore;
 use biem_core::config::{self, StorageMode};
 use biem_core::query::{Filter, QueryEngine, QueryRequest};
 use biem_core::registry::Registry;
+use biem_enrich::builtin::{ComplexityTagger, ConventionTagger, SizeTagger, TopicTagger};
+use biem_enrich::{InMemoryTaggerCache, TagPipeline, FsTaggerCache, load_yaml_taggers};
 use biem_ingest::IngestionPipeline;
 use biem_parser::markdown::MarkdownParser;
 use biem_query::BitmapQueryEngine;
@@ -92,6 +94,8 @@ enum Commands {
         #[arg(long)]
         vault: Option<PathBuf>,
     },
+    /// List active taggers (builtin + custom)
+    Taggers,
 }
 
 fn main() -> Result<()> {
@@ -110,6 +114,7 @@ fn main() -> Result<()> {
         Commands::Status { ref vault } => cmd_status(vault.as_ref(), &cli),
         Commands::Filters { ref category, ref vault } => cmd_filters(vault.as_ref(), category.clone(), &cli),
         Commands::Compact { ref vault } => cmd_compact(vault.as_ref(), &cli),
+        Commands::Taggers => cmd_taggers(),
     }
 }
 
@@ -221,11 +226,12 @@ fn cmd_init(path: &PathBuf, local: bool) -> Result<()> {
 
     // Run initial bulk index
     let (registry, bitmap_store) = open_persistent_stores(&entry.data_dir)?;
+    let tag_pipeline = build_tag_pipeline(Some(&entry.data_dir));
     let mut pipeline = IngestionPipeline::new(
         vec![Box::new(MarkdownParser)],
         registry,
         bitmap_store,
-    );
+    ).with_tag_pipeline(tag_pipeline);
 
     let result = pipeline.bulk_index(&vault_path)
         .context("initial index failed")?;
@@ -258,21 +264,28 @@ fn cmd_config() -> Result<()> {
 }
 
 fn cmd_index(path: &PathBuf, cli: &Cli) -> Result<()> {
+    let data_dir_resolved = if !cli.memory {
+        let dd = resolve_data_dir_for_vault(path, cli)?;
+        std::fs::create_dir_all(&dd)
+            .with_context(|| format!("failed to create data dir: {}", dd.display()))?;
+        eprintln!("Data dir: {}", dd.display());
+        Some(dd)
+    } else {
+        None
+    };
+
     let (registry, bitmap_store) = if cli.memory {
         open_memory_stores()
     } else {
-        let data_dir = resolve_data_dir_for_vault(path, cli)?;
-        std::fs::create_dir_all(&data_dir)
-            .with_context(|| format!("failed to create data dir: {}", data_dir.display()))?;
-        eprintln!("Data dir: {}", data_dir.display());
-        open_persistent_stores(&data_dir)?
+        open_persistent_stores(data_dir_resolved.as_ref().unwrap())?
     };
 
+    let tag_pipeline = build_tag_pipeline(data_dir_resolved.as_ref());
     let mut pipeline = IngestionPipeline::new(
         vec![Box::new(MarkdownParser)],
         registry,
         bitmap_store,
-    );
+    ).with_tag_pipeline(tag_pipeline);
 
     let result = pipeline.bulk_index(path.as_path())
         .context("failed to index vault")?;
@@ -460,6 +473,54 @@ fn cmd_compact(vault: Option<&PathBuf>, cli: &Cli) -> Result<()> {
         println!("  {} documents removed", result.docs_removed);
         println!("  {} bitmaps cleaned", result.bitmaps_cleaned);
         println!("  {}ms elapsed", result.duration_ms);
+    }
+
+    Ok(())
+}
+
+/// Build the default tag pipeline with builtin taggers + any custom YAML taggers.
+fn build_tag_pipeline(data_dir: Option<&PathBuf>) -> TagPipeline {
+    let mut taggers: Vec<Box<dyn biem_core::enrich::Tagger>> = vec![
+        Box::new(SizeTagger),
+        Box::new(ConventionTagger),
+        Box::new(TopicTagger),
+        Box::new(ComplexityTagger),
+    ];
+
+    // Load custom YAML taggers from global and local dirs
+    let home = std::env::var("HOME").unwrap_or_default();
+    let global_taggers_dir = PathBuf::from(&home).join(".biem").join("taggers");
+    if let Ok(custom) = load_yaml_taggers(&global_taggers_dir) {
+        taggers.extend(custom);
+    }
+
+    // Local taggers (relative to data_dir's parent, i.e. vault root)
+    // For now, just check .biem/taggers/ relative to data_dir
+    if let Some(dd) = data_dir {
+        let local_taggers_dir = dd.join("taggers");
+        if let Ok(custom) = load_yaml_taggers(&local_taggers_dir) {
+            taggers.extend(custom);
+        }
+    }
+
+    let cache: Box<dyn biem_core::enrich::TaggerCache> = match data_dir {
+        Some(dd) => match FsTaggerCache::new(dd) {
+            Ok(c) => Box::new(c),
+            Err(_) => Box::new(InMemoryTaggerCache::new()),
+        },
+        None => Box::new(InMemoryTaggerCache::new()),
+    };
+
+    TagPipeline::new(taggers, cache)
+}
+
+fn cmd_taggers() -> Result<()> {
+    let pipeline = build_tag_pipeline(None);
+    let names = pipeline.tagger_names();
+
+    println!("Active taggers ({}):", names.len());
+    for name in names {
+        println!("  • {name}");
     }
 
     Ok(())
