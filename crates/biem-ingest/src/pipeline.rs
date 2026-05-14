@@ -14,6 +14,7 @@ use biem_core::types::{
     BitmapKey, ChangeEvent, ChangeKind, DocId, NoteType,
     ParseResult, SourceType,
 };
+use biem_enrich::TagPipeline;
 
 // ── Error ────────────────────────────────────────────────────────
 
@@ -77,6 +78,7 @@ pub struct IngestionPipeline {
     parsers: Vec<Box<dyn Parser>>,
     registry: Box<dyn Registry>,
     bitmap_store: Box<dyn BitmapStore>,
+    tag_pipeline: Option<TagPipeline>,
 }
 
 impl IngestionPipeline {
@@ -89,7 +91,14 @@ impl IngestionPipeline {
             parsers,
             registry,
             bitmap_store,
+            tag_pipeline: None,
         }
+    }
+
+    /// Set the enrichment pipeline. If set, inferred tags are added to bitmap keys.
+    pub fn with_tag_pipeline(mut self, pipeline: TagPipeline) -> Self {
+        self.tag_pipeline = Some(pipeline);
+        self
     }
 
     /// Decompose the pipeline into its owned parts for handoff (e.g. to a query engine).
@@ -164,6 +173,31 @@ impl IngestionPipeline {
         keys
     }
 
+    /// Collect bitmap keys including enrichment tags (if pipeline is configured).
+    fn enriched_bitmap_keys(
+        &self,
+        path: &Path,
+        content: &[u8],
+        source: &SourceType,
+        result: &ParseResult,
+    ) -> Vec<BitmapKey> {
+        let mut keys = Self::bitmap_keys_for(path, source, result);
+        if let Some(ref tp) = self.tag_pipeline {
+            match tp.enrich(path, content, result, source) {
+                Ok(inferred) => {
+                    for tag in inferred {
+                        // Inferred tags are already namespaced (e.g. "topic:auth", "size:small")
+                        keys.push(tag);
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "enrichment failed, continuing without inferred tags");
+                }
+            }
+        }
+        keys
+    }
+
     // ── Chunk conversion helper ──────────────────────────────────
 
     fn chunks_to_new(doc_id: DocId, result: &ParseResult) -> Vec<NewChunk> {
@@ -215,7 +249,7 @@ impl IngestionPipeline {
         let chunks = Self::chunks_to_new(doc_id, &result);
         self.registry.replace_chunks(doc_id, chunks)?;
 
-        let keys = Self::bitmap_keys_for(path, &source, &result);
+        let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
         let mut updated = 0u32;
         for key in &keys {
             self.bitmap_store.insert_id(key, doc_id)?;
@@ -264,7 +298,7 @@ impl IngestionPipeline {
         // since we don't store old content. Instead, list keys containing this doc_id
         // and diff against new keys.
         let new_keys: HashSet<BitmapKey> =
-            Self::bitmap_keys_for(path, &source, &result).into_iter().collect();
+            self.enriched_bitmap_keys(path, &content, &source, &result).into_iter().collect();
 
         // Find old keys by scanning existing bitmaps that contain this doc_id
         let all_existing_keys = self.bitmap_store.list_keys(None)?;
@@ -416,7 +450,7 @@ impl IngestionPipeline {
                     // Unchanged — skip, but still collect bitmap keys so bulk_put is correct
                     let parser = self.find_parser(path).expect("already filtered");
                     let result = parser.parse(path, &content)?;
-                    let keys = Self::bitmap_keys_for(path, &source, &result);
+                    let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
                     for key in keys {
                         all_bitmap_entries
                             .entry(key)
@@ -433,7 +467,7 @@ impl IngestionPipeline {
                     let chunks = Self::chunks_to_new(existing.doc_id, &result);
                     self.registry.replace_chunks(existing.doc_id, chunks)?;
 
-                    let keys = Self::bitmap_keys_for(path, &source, &result);
+                    let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
                     for key in keys {
                         all_bitmap_entries
                             .entry(key)
@@ -457,7 +491,7 @@ impl IngestionPipeline {
                 let chunks = Self::chunks_to_new(doc_id, &result);
                 self.registry.replace_chunks(doc_id, chunks)?;
 
-                let keys = Self::bitmap_keys_for(path, &source, &result);
+                let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
                 for key in keys {
                     all_bitmap_entries
                         .entry(key)

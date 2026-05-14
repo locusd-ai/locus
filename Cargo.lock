@@ -460,8 +460,10 @@ version = "0.1.0"
 dependencies = [
  "biem-core",
  "blake3",
+ "globset",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "tracing",
 ]
@@ -472,6 +474,7 @@ version = "0.1.0"
 dependencies = [
  "biem-bitmap",
  "biem-core",
+ "biem-enrich",
  "biem-parser",
  "biem-query",
  "biem-registry",
