@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use biem_core::{
-    BitmapCategory, BitmapKey, ChunkId, DocId, NoteType, Registry, RegistryError, Timestamp,
+    BitmapCategory, BitmapKey, ChunkId, DocId, DocType, Registry, RegistryError, Timestamp,
 };
 use biem_core::registry::{
     BitmapCatalogEntry, ChunkRecord, DocRecord, GlobalState, NewChunk, NewDoc,
@@ -106,7 +106,7 @@ impl Registry for InMemoryRegistry {
         &mut self,
         doc_id: DocId,
         hash: [u8; 32],
-        auto_type: Option<NoteType>,
+        auto_type: Option<DocType>,
     ) -> Result<(), RegistryError> {
         let record = self
             .docs
@@ -296,11 +296,11 @@ mod tests {
         let mut r = InMemoryRegistry::new();
         let id = r.insert_doc(make_doc("a.md")).unwrap();
         let new_hash = [1u8; 32];
-        r.update_doc(id, new_hash, Some(NoteType::Task)).unwrap();
+        r.update_doc(id, new_hash, Some(DocType::Task)).unwrap();
 
         let record = r.lookup_by_id(id).unwrap().unwrap();
         assert_eq!(record.blake3_hash, new_hash);
-        assert_eq!(record.auto_type, Some(NoteType::Task));
+        assert_eq!(record.auto_type, Some(DocType::Task));
     }
 
     #[test]

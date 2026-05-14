@@ -22,7 +22,7 @@ mod tests {
                 file_path: PathBuf::from("/vault/work/task1.md"),
                 source_type: SourceType::Obsidian,
                 blake3_hash: [1; 32],
-                auto_type: Some(biem_core::types::NoteType::Task),
+                auto_type: Some(biem_core::types::DocType::Task),
             })
             .unwrap();
         let d2 = registry

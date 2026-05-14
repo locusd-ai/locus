@@ -25,9 +25,9 @@ pub enum SourceType {
     // Future: Confluence, etc.
 }
 
-/// Auto-detected note type based on structural analysis.
+/// Auto-detected document type based on structural analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NoteType {
+pub enum DocType {
     /// Default — no strong structural signal.
     Note,
     /// High density of `[ ]` / `[x]` items.
@@ -36,7 +36,13 @@ pub enum NoteType {
     Moc,
     /// Has url/isbn/source in frontmatter.
     Reference,
-    // Future: Person, Meeting, etc.
+    // Code document types
+    /// A source code file.
+    SourceFile,
+    /// A test file.
+    TestFile,
+    /// A configuration file.
+    ConfigFile,
 }
 
 /// The category of a bitmap key, for catalog queries.
@@ -136,7 +142,7 @@ pub struct ParseResult {
     /// Links to other documents.
     pub links: Vec<LinkRef>,
     /// Auto-detected note type, if confident enough.
-    pub auto_type: Option<NoteType>,
+    pub auto_type: Option<DocType>,
     /// Parsed YAML frontmatter as key-value pairs.
     pub frontmatter: HashMap<String, serde_json::Value>,
 }

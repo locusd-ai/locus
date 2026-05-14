@@ -12,7 +12,7 @@ use biem_core::registry::{
 };
 use biem_core::semantic::{Embedder, VectorStore};
 use biem_core::types::{
-    BitmapKey, ChangeEvent, ChangeKind, DocId, NoteType,
+    BitmapKey, ChangeEvent, ChangeKind, DocId, DocType,
     ParseResult, SourceType,
 };
 use biem_enrich::TagPipeline;
@@ -159,12 +159,15 @@ impl IngestionPipeline {
         format!("link:{target}")
     }
 
-    fn type_key(note_type: &NoteType) -> BitmapKey {
-        let label = match note_type {
-            NoteType::Note => "note",
-            NoteType::Task => "task",
-            NoteType::Moc => "moc",
-            NoteType::Reference => "reference",
+    fn type_key(doc_type: &DocType) -> BitmapKey {
+        let label = match doc_type {
+            DocType::Note => "note",
+            DocType::Task => "task",
+            DocType::Moc => "moc",
+            DocType::Reference => "reference",
+            DocType::SourceFile => "source_file",
+            DocType::TestFile => "test_file",
+            DocType::ConfigFile => "config_file",
         };
         format!("type:{label}")
     }

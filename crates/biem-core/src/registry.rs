@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     BitmapCategory, BitmapKey, ChunkId, ChunkKind, ChunkMetadata,
-    DocId, NoteType, SourceType, Timestamp,
+    DocId, DocType, SourceType, Timestamp,
 };
 
 // ── Records (output types) ───────────────────────────────────────
@@ -15,7 +15,7 @@ pub struct DocRecord {
     pub source_type: SourceType,
     pub blake3_hash: [u8; 32],
     pub last_indexed: Timestamp,
-    pub auto_type: Option<NoteType>,
+    pub auto_type: Option<DocType>,
 }
 
 /// A chunk record in the registry.
@@ -55,7 +55,7 @@ pub struct NewDoc {
     pub file_path: PathBuf,
     pub source_type: SourceType,
     pub blake3_hash: [u8; 32],
-    pub auto_type: Option<NoteType>,
+    pub auto_type: Option<DocType>,
 }
 
 /// Input for registering chunks belonging to a document.
@@ -96,7 +96,7 @@ pub trait Registry: Send + Sync {
         &mut self,
         doc_id: DocId,
         hash: [u8; 32],
-        auto_type: Option<NoteType>,
+        auto_type: Option<DocType>,
     ) -> Result<(), RegistryError>;
 
     /// Update the file path for an existing document (file move/rename).

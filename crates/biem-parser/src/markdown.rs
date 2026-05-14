@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use biem_core::{
-    Chunk, ChunkKind, ChunkMetadata, LinkRef, NoteType, ParseError, ParseResult, Parser,
+    Chunk, ChunkKind, ChunkMetadata, LinkRef, DocType, ParseError, ParseResult, Parser,
 };
 
 /// Obsidian-flavour Markdown parser.
@@ -445,11 +445,11 @@ fn detect_auto_type(
     content: &str,
     links: &[LinkRef],
     frontmatter: &HashMap<String, serde_json::Value>,
-) -> Option<NoteType> {
+) -> Option<DocType> {
     // Reference: has url, isbn, or source in frontmatter
     for key in ["url", "isbn", "source"] {
         if frontmatter.contains_key(key) {
-            return Some(NoteType::Reference);
+            return Some(DocType::Reference);
         }
     }
 
@@ -459,12 +459,12 @@ fn detect_auto_type(
     let checkbox_count = content.matches("- [ ]").count() + content.matches("- [x]").count()
         + content.matches("- [X]").count();
     if checkbox_count >= 3 && (checkbox_count as f64 / line_count as f64) > 0.2 {
-        return Some(NoteType::Task);
+        return Some(DocType::Task);
     }
 
     // Moc: high density of wikilinks
     if links.len() >= 5 && (links.len() as f64 / line_count as f64) > 0.3 {
-        return Some(NoteType::Moc);
+        return Some(DocType::Moc);
     }
 
     None
@@ -679,7 +679,7 @@ mod tests {
         let content = "# Tasks\n- [ ] Do thing\n- [x] Done thing\n- [ ] Another\n- [ ] More\n";
         let links = extract_links(content);
         let fm = HashMap::new();
-        assert_eq!(detect_auto_type(content, &links, &fm), Some(NoteType::Task));
+        assert_eq!(detect_auto_type(content, &links, &fm), Some(DocType::Task));
     }
 
     #[test]
@@ -687,7 +687,7 @@ mod tests {
         let content = "# Index\n[[A]]\n[[B]]\n[[C]]\n[[D]]\n[[E]]\n[[F]]\n";
         let links = extract_links(content);
         let fm = HashMap::new();
-        assert_eq!(detect_auto_type(content, &links, &fm), Some(NoteType::Moc));
+        assert_eq!(detect_auto_type(content, &links, &fm), Some(DocType::Moc));
     }
 
     #[test]
@@ -698,7 +698,7 @@ mod tests {
         fm.insert("isbn".to_string(), serde_json::json!("978-0-123456-78-9"));
         assert_eq!(
             detect_auto_type(content, &links, &fm),
-            Some(NoteType::Reference)
+            Some(DocType::Reference)
         );
     }
 

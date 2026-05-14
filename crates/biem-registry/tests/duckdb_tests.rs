@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use biem_core::registry::{BitmapCatalogEntry, NewChunk, NewDoc};
 use biem_core::{
-    BitmapCategory, ChunkKind, ChunkMetadata, NoteType, Registry, RegistryError, SourceType,
+    BitmapCategory, ChunkKind, ChunkMetadata, DocType, Registry, RegistryError, SourceType,
 };
 use biem_registry::duckdb::DuckDbRegistry;
 
@@ -80,11 +80,11 @@ fn update_doc_fields() {
     let mut r = open_registry();
     let id = r.insert_doc(make_doc("a.md")).unwrap();
     let new_hash = [1u8; 32];
-    r.update_doc(id, new_hash, Some(NoteType::Task)).unwrap();
+    r.update_doc(id, new_hash, Some(DocType::Task)).unwrap();
 
     let record = r.lookup_by_id(id).unwrap().unwrap();
     assert_eq!(record.blake3_hash, new_hash);
-    assert_eq!(record.auto_type, Some(NoteType::Task));
+    assert_eq!(record.auto_type, Some(DocType::Task));
 }
 
 #[test]

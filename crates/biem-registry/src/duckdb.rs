@@ -7,7 +7,7 @@ use biem_core::registry::{
     BitmapCatalogEntry, ChunkRecord, DocRecord, GlobalState, NewChunk, NewDoc,
 };
 use biem_core::{
-    BitmapCategory, ChunkId, ChunkKind, ChunkMetadata, DocId, NoteType, Registry, RegistryError,
+    BitmapCategory, ChunkId, ChunkKind, ChunkMetadata, DocId, DocType, Registry, RegistryError,
     SourceType, Timestamp, Visibility,
 };
 use duckdb::{params, Connection};
@@ -125,21 +125,27 @@ impl DuckDbRegistry {
         }
     }
 
-    fn note_type_to_str(nt: &NoteType) -> &'static str {
+    fn doc_type_to_str(nt: &DocType) -> &'static str {
         match nt {
-            NoteType::Note => "note",
-            NoteType::Task => "task",
-            NoteType::Moc => "moc",
-            NoteType::Reference => "reference",
+            DocType::Note => "note",
+            DocType::Task => "task",
+            DocType::Moc => "moc",
+            DocType::Reference => "reference",
+            DocType::SourceFile => "source_file",
+            DocType::TestFile => "test_file",
+            DocType::ConfigFile => "config_file",
         }
     }
 
-    fn str_to_note_type(s: &str) -> Option<NoteType> {
+    fn str_to_doc_type(s: &str) -> Option<DocType> {
         match s {
-            "note" => Some(NoteType::Note),
-            "task" => Some(NoteType::Task),
-            "moc" => Some(NoteType::Moc),
-            "reference" => Some(NoteType::Reference),
+            "note" => Some(DocType::Note),
+            "task" => Some(DocType::Task),
+            "moc" => Some(DocType::Moc),
+            "reference" => Some(DocType::Reference),
+            "source_file" => Some(DocType::SourceFile),
+            "test_file" => Some(DocType::TestFile),
+            "config_file" => Some(DocType::ConfigFile),
             _ => None,
         }
     }
@@ -244,7 +250,7 @@ impl DuckDbRegistry {
             source_type: DuckDbRegistry::str_to_source_type(&source_type_str),
             blake3_hash,
             last_indexed: row.get(4)?,
-            auto_type: auto_type_str.and_then(|s| DuckDbRegistry::str_to_note_type(&s)),
+            auto_type: auto_type_str.and_then(|s| DuckDbRegistry::str_to_doc_type(&s)),
         })
     }
 }
@@ -265,7 +271,7 @@ impl Registry for DuckDbRegistry {
                 Self::source_type_to_str(&doc.source_type),
                 doc.blake3_hash.to_vec(),
                 now,
-                doc.auto_type.as_ref().map(Self::note_type_to_str),
+                doc.auto_type.as_ref().map(Self::doc_type_to_str),
             ],
         )
         .map_err(|e| {
@@ -387,14 +393,14 @@ impl Registry for DuckDbRegistry {
         &mut self,
         doc_id: DocId,
         hash: [u8; 32],
-        auto_type: Option<NoteType>,
+        auto_type: Option<DocType>,
     ) -> Result<(), RegistryError> {
         let conn = self.conn();
         let now = Self::now();
         let affected = conn
             .execute(
                 "UPDATE documents SET blake3_hash = ?, last_indexed = ?, auto_type = ? WHERE doc_id = ?",
-                params![hash.to_vec(), now, auto_type.as_ref().map(Self::note_type_to_str), doc_id],
+                params![hash.to_vec(), now, auto_type.as_ref().map(Self::doc_type_to_str), doc_id],
             )
             .map_err(|e| RegistryError::Database(e.to_string()))?;
 

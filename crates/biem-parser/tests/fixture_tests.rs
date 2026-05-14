@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use biem_core::{ChunkKind, NoteType, Parser};
+use biem_core::{ChunkKind, DocType, Parser};
 use biem_parser::markdown::MarkdownParser;
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -49,7 +49,7 @@ fn task_note_detected() {
     let p = MarkdownParser;
     let content = fixture("task-note.md");
     let result = p.parse(Path::new("task-note.md"), &content).unwrap();
-    assert_eq!(result.auto_type, Some(NoteType::Task));
+    assert_eq!(result.auto_type, Some(DocType::Task));
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn moc_detected() {
     let p = MarkdownParser;
     let content = fixture("moc.md");
     let result = p.parse(Path::new("moc.md"), &content).unwrap();
-    assert_eq!(result.auto_type, Some(NoteType::Moc));
+    assert_eq!(result.auto_type, Some(DocType::Moc));
     assert!(result.links.len() >= 5);
 }
 

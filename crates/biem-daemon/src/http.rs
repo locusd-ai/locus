@@ -177,7 +177,7 @@ mod tests {
     use biem_bitmap::memory::InMemoryBitmapStore;
     use biem_core::bitmap::BitmapStore;
     use biem_core::registry::{NewDoc, Registry};
-    use biem_core::types::{NoteType, SourceType};
+    use biem_core::types::{DocType, SourceType};
     use biem_query::BitmapQueryEngine;
     use biem_registry::memory::InMemoryRegistry;
 
@@ -190,7 +190,7 @@ mod tests {
                 file_path: PathBuf::from("/vault/work/task1.md"),
                 source_type: SourceType::Obsidian,
                 blake3_hash: [1; 32],
-                auto_type: Some(NoteType::Task),
+                auto_type: Some(DocType::Task),
             })
             .unwrap();
         let d2 = registry
