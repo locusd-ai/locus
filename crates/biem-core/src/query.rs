@@ -127,4 +127,6 @@ pub enum QueryError {
     Bitmap(#[from] BitmapError),
     #[error(transparent)]
     Registry(#[from] RegistryError),
+    #[error("semantic error: {0}")]
+    Semantic(String),
 }

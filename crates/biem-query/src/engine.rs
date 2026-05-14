@@ -10,6 +10,10 @@ use biem_core::query::{
     MatchPointer, QueryEngine, QueryError, QueryRequest, QueryResult,
 };
 use biem_core::registry::{BitmapCatalogEntry, Registry};
+use biem_core::semantic::{
+    ScoreSource, ScoredPointer, SemanticQueryRequest, SemanticQueryResult,
+    Embedder, VectorStore,
+};
 use biem_core::types::BitmapCategory;
 
 /// Concrete query engine backed by bitmap store + registry.
@@ -149,6 +153,101 @@ impl BitmapQueryEngine {
                 children.iter().flat_map(Self::collect_leaf_keys).collect()
             }
         }
+    }
+
+    /// Perform a semantic query: bitmap pre-filter → vector search within matching chunks.
+    ///
+    /// The bitmap filter is mandatory — there is no full-space vector search.
+    #[instrument(skip(self, embedder, vector_store))]
+    pub fn semantic_query(
+        &self,
+        request: &SemanticQueryRequest,
+        embedder: &dyn Embedder,
+        vector_store: &dyn VectorStore,
+    ) -> Result<SemanticQueryResult, QueryError> {
+        // Phase 1: bitmap pre-filter
+        let bitmap_start = Instant::now();
+        let matching = self.resolve_filter(&request.filter)?;
+        let bitmap_candidates = matching.len() as u32;
+        let elapsed_bitmap_us = bitmap_start.elapsed().as_micros() as u64;
+
+        if matching.is_empty() {
+            return Ok(SemanticQueryResult {
+                pointers: vec![],
+                bitmap_candidates: 0,
+                vector_searched: 0,
+                elapsed_bitmap_us,
+                elapsed_vector_us: 0,
+                elapsed_rerank_us: 0,
+            });
+        }
+
+        // Phase 2: collect all chunk IDs for matching docs
+        let mut candidate_chunk_ids: Vec<u32> = Vec::new();
+        for doc_id in matching.iter() {
+            if let Ok(chunks) = self.registry.get_chunks(doc_id) {
+                for c in chunks {
+                    candidate_chunk_ids.push(c.chunk_id);
+                }
+            }
+        }
+
+        let vector_searched = candidate_chunk_ids.len() as u32;
+
+        // Phase 3: embed query and search
+        let vector_start = Instant::now();
+        let query_embedding = embedder
+            .embed(&[&request.query_text])
+            .map_err(|e| QueryError::Semantic(e.to_string()))?;
+
+        let query_vec = query_embedding
+            .into_iter()
+            .next()
+            .ok_or_else(|| QueryError::Semantic("embedder returned no vector".into()))?;
+
+        let scored_chunks = vector_store
+            .search_within(&query_vec, &candidate_chunk_ids, request.top_k)
+            .map_err(|e| QueryError::Semantic(e.to_string()))?;
+        let elapsed_vector_us = vector_start.elapsed().as_micros() as u64;
+
+        // Phase 4: hydrate results
+        let leaf_keys = Self::collect_leaf_keys(&request.filter);
+        let mut pointers = Vec::new();
+
+        for (chunk_id, score) in scored_chunks {
+            // Find the doc that owns this chunk
+            // We need to look up chunk → doc_id via registry
+            // For now, iterate matching docs to find the owner
+            let mut owner_doc_id = None;
+            for doc_id in matching.iter() {
+                if let Ok(chunks) = self.registry.get_chunks(doc_id) {
+                    if chunks.iter().any(|c| c.chunk_id == chunk_id) {
+                        owner_doc_id = Some(doc_id);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(doc_id) = owner_doc_id {
+                if let Some(ptr) = self.hydrate(doc_id, leaf_keys.clone())? {
+                    pointers.push(ScoredPointer {
+                        pointer: ptr,
+                        chunk_id,
+                        score,
+                        score_source: ScoreSource::CosineSimilarity,
+                    });
+                }
+            }
+        }
+
+        Ok(SemanticQueryResult {
+            pointers,
+            bitmap_candidates,
+            vector_searched,
+            elapsed_bitmap_us,
+            elapsed_vector_us,
+            elapsed_rerank_us: 0,
+        })
     }
 }
 
