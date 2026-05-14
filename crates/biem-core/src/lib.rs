@@ -11,6 +11,7 @@ pub mod bitmap;
 pub mod query;
 pub mod config;
 pub mod enrich;
+pub mod semantic;
 
 pub use types::*;
 pub use parser::*;
@@ -18,3 +19,4 @@ pub use registry::*;
 pub use bitmap::*;
 pub use query::*;
 pub use enrich::*;
+pub use semantic::*;

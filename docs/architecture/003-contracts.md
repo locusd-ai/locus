@@ -1076,3 +1076,73 @@ graph BT
     DAEMON --> INGEST
     DAEMON --> WATCH
 ```
+
+---
+
+## Semantic Layer (`biem-core/src/semantic.rs`)
+
+### Types
+
+```rust
+pub type EmbeddingVector = Vec<f32>;
+
+pub enum ScoreSource {
+    CosineSimilarity,
+    Reranker(String),
+}
+
+pub struct ScoredPointer {
+    pub pointer: MatchPointer,
+    pub chunk_id: ChunkId,
+    pub score: f32,
+    pub score_source: ScoreSource,
+}
+
+pub struct SemanticQueryRequest {
+    pub filter: Filter,          // mandatory bitmap pre-filter
+    pub query_text: String,
+    pub top_k: usize,
+    pub rerank: bool,
+}
+
+pub struct SemanticQueryResult {
+    pub pointers: Vec<ScoredPointer>,
+    pub bitmap_candidates: u32,
+    pub vector_searched: u32,
+    pub elapsed_bitmap_us: u64,
+    pub elapsed_vector_us: u64,
+    pub elapsed_rerank_us: u64,
+}
+```
+
+### Traits
+
+```rust
+pub trait Embedder: Send + Sync {
+    fn embed(&self, texts: &[&str]) -> Result<Vec<EmbeddingVector>, EmbedError>;
+    fn dimension(&self) -> usize;
+}
+
+pub trait VectorStore: Send + Sync {
+    fn upsert(&self, chunk_id: ChunkId, vector: &EmbeddingVector) -> Result<(), VectorError>;
+    fn delete(&self, chunk_id: ChunkId) -> Result<(), VectorError>;
+    fn search_within(
+        &self,
+        query: &EmbeddingVector,
+        candidate_chunk_ids: &[ChunkId],
+        top_k: usize,
+    ) -> Result<Vec<(ChunkId, f32)>, VectorError>;
+}
+
+pub trait Reranker: Send + Sync {
+    fn rerank(
+        &self,
+        query: &str,
+        candidates: &[(ChunkId, &str)],
+    ) -> Result<Vec<(ChunkId, f32)>, RerankError>;
+}
+```
+
+### Key contract
+
+**Bitmap filter is mandatory for semantic queries.** There is no "search everything" mode — vector search is always scoped to bitmap-pre-filtered candidates. This keeps vector search fast and focused.
