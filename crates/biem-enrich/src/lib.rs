@@ -5,6 +5,8 @@
 
 mod pipeline;
 mod cache;
+mod fs_cache;
 
 pub use pipeline::TagPipeline;
 pub use cache::InMemoryTaggerCache;
+pub use fs_cache::FsTaggerCache;
