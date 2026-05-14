@@ -10,11 +10,14 @@ use biem_core::bitmap::BitmapStore;
 use biem_core::config::{self, StorageMode};
 use biem_core::query::{Filter, QueryEngine, QueryRequest};
 use biem_core::registry::Registry;
+use biem_core::semantic::Embedder;
+use biem_embed::{FastEmbedEmbedder, UsearchVectorStore};
 use biem_enrich::builtin::{ComplexityTagger, ConventionTagger, SizeTagger, TopicTagger};
 use biem_enrich::{InMemoryTaggerCache, TagPipeline, FsTaggerCache, load_yaml_taggers};
 use biem_ingest::IngestionPipeline;
 use biem_parser::markdown::MarkdownParser;
 use biem_query::BitmapQueryEngine;
+use biem_query::SemanticQueryRequest;
 use biem_registry::duckdb::DuckDbRegistry;
 use biem_registry::memory::InMemoryRegistry;
 
@@ -104,6 +107,17 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Semantic search: bitmap pre-filter + vector similarity
+    Semantic {
+        /// Natural language query text
+        query: String,
+        /// Bitmap filter keys for pre-filtering (e.g. "tag:work")
+        #[arg(long, short = 'f')]
+        filter: Vec<String>,
+        /// Maximum results
+        #[arg(long, default_value = "5")]
+        top_k: usize,
+    },
 }
 
 fn main() -> Result<()> {
@@ -124,6 +138,7 @@ fn main() -> Result<()> {
         Commands::Compact { ref vault } => cmd_compact(vault.as_ref(), &cli),
         Commands::Taggers => cmd_taggers(),
         Commands::Enrich { ref path, force } => cmd_enrich(path, force, &cli),
+        Commands::Semantic { ref query, ref filter, top_k } => cmd_semantic(query, filter, top_k, &cli),
     }
 }
 
@@ -482,6 +497,74 @@ fn cmd_compact(vault: Option<&PathBuf>, cli: &Cli) -> Result<()> {
         println!("  {} documents removed", result.docs_removed);
         println!("  {} bitmaps cleaned", result.bitmaps_cleaned);
         println!("  {}ms elapsed", result.duration_ms);
+    }
+
+    Ok(())
+}
+
+fn cmd_semantic(query: &str, filter_keys: &[String], top_k: usize, cli: &Cli) -> Result<()> {
+    let data_dir = resolve_data_dir(cli)?;
+    if !data_dir.exists() {
+        anyhow::bail!(
+            "data dir {} does not exist — run `biem init <vault>` first",
+            data_dir.display()
+        );
+    }
+
+    let (registry, bitmap_store) = open_persistent_stores(&data_dir)?;
+    let engine = BitmapQueryEngine::new(bitmap_store, registry);
+
+    // Build filter from keys (default to source:obsidian if no filters)
+    let filter = if filter_keys.len() == 1 {
+        Filter::Key(filter_keys[0].clone())
+    } else if filter_keys.is_empty() {
+        Filter::Key("source:obsidian".into())
+    } else {
+        Filter::And(filter_keys.iter().map(|k| Filter::Key(k.clone())).collect())
+    };
+
+    let request = SemanticQueryRequest {
+        filter,
+        query_text: query.to_string(),
+        top_k,
+        rerank: false,
+    };
+
+    // Initialize embedder and vector store
+    eprintln!("Loading embedding model...");
+    let embedder = FastEmbedEmbedder::new()
+        .context("failed to initialize embedder")?;
+    let vector_path = data_dir.join("vectors.usearch");
+    let vector_store = UsearchVectorStore::new(&vector_path, embedder.dimension())
+        .map_err(|e| anyhow::anyhow!("failed to open vector store: {e}"))?;
+
+    let result = engine
+        .semantic_query(&request, &embedder, &vector_store)
+        .context("semantic query failed")?;
+
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    println!(
+        "{} results (bitmap: {} candidates, vector: {} searched, {}μs bitmap + {}μs vector)",
+        result.pointers.len(),
+        result.bitmap_candidates,
+        result.vector_searched,
+        result.elapsed_bitmap_us,
+        result.elapsed_vector_us,
+    );
+    println!();
+
+    for sp in &result.pointers {
+        println!(
+            "  {:.3}  {} (doc_id={}, chunk_id={})",
+            sp.score,
+            sp.pointer.file_path.display(),
+            sp.pointer.doc_id,
+            sp.chunk_id,
+        );
     }
 
     Ok(())
