@@ -193,7 +193,7 @@ async fn main() -> Result<()> {
         bitmap_store = b;
     }
 
-    let mut pipeline = IngestionPipeline::new(
+    let pipeline = IngestionPipeline::new(
         vec![Box::new(MarkdownParser)],
         registry,
         bitmap_store,

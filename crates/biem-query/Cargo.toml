@@ -15,6 +15,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 biem-parser = { workspace = true }
 biem-ingest = { workspace = true }
+biem-embed = { workspace = true }
 tempfile = "3"
 roaring = { workspace = true }
 serde = { workspace = true }

@@ -67,6 +67,11 @@ impl UsearchVectorStore {
     pub fn size(&self) -> usize {
         self.index.size()
     }
+
+    /// The dimensionality of stored vectors.
+    pub fn dimensions(&self) -> usize {
+        self.dimensions
+    }
 }
 
 impl VectorStore for UsearchVectorStore {

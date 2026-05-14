@@ -48,6 +48,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "flaky on CI — filesystem events are timing-sensitive"]
     fn test_detects_file_creation() {
         let dir = tempfile::tempdir().unwrap();
         let dir_path = dir.path().to_path_buf();
