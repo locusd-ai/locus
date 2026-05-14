@@ -420,6 +420,76 @@ classDiagram
 
 ---
 
+## 4b. Enrichment Contract (Phase 2 — Workstream 1)
+
+The enrichment pipeline runs after parsing and before bitmap writes. It produces inferred bitmap keys via pluggable taggers, cached per file content hash.
+
+```rust
+/// Result from a single tagger run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaggerResult {
+    pub tagger_name: String,
+    pub tags: Vec<String>,
+    pub confidence: Option<f32>,  // 0.0–1.0, None for rule-based taggers
+}
+
+/// Combined enrichment output for a document, stored in cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrichmentCache {
+    pub content_hash: String,       // blake3 hex
+    pub tagger_config_hash: String, // blake3 hex, for invalidation
+    pub results: Vec<TaggerResult>,
+    pub timestamp: Timestamp,
+}
+```
+
+```rust
+/// A tagger produces additional bitmap keys from a parse result.
+/// Taggers are pure functions — no filesystem I/O.
+pub trait Tagger: Send + Sync {
+    fn name(&self) -> &str;
+    fn applies_to(&self, source: &SourceType) -> bool;
+    fn tag(
+        &self,
+        path: &Path,
+        content: &[u8],
+        parse_result: &ParseResult,
+    ) -> Result<TaggerResult, EnrichError>;
+}
+
+/// Cache for tagger results, keyed by content hash.
+pub trait TaggerCache: Send + Sync {
+    fn get(&self, content_hash: &str) -> Result<Option<EnrichmentCache>, EnrichError>;
+    fn put(&self, cache: &EnrichmentCache) -> Result<(), EnrichError>;
+    fn invalidate_tagger(&mut self, tagger_name: &str) -> Result<(), EnrichError>;
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EnrichError {
+    #[error("tagger '{0}' failed: {1}")]
+    TaggerFailed(String, String),
+    #[error("cache I/O error: {0}")]
+    CacheIo(String),
+    #[error("cache serialization error: {0}")]
+    CacheSerialization(String),
+}
+```
+
+### BitmapCategory additions
+
+```rust
+pub enum BitmapCategory {
+    Tag, Folder, Link, Type, Source,
+    Enrichment,  // inferred keys from taggers (topic:*, complexity:*, etc.)
+    Code,        // keys from code parser (lang:*, kind:*, etc.)
+    Custom,      // keys from user-defined YAML taggers
+}
+```
+
+Inferred tags are indexed as regular bitmap keys (e.g. `topic:auth`, `size:small`). The `Enrichment` category is used in the bitmap catalog for discovery and filtering via `biem bitmaps --category enrichment`.
+
+---
+
 ## 5. Ingestion Contract
 
 Ingestion orchestrates parsers, the registry, and the bitmap store. It doesn't have a trait — it's a concrete coordinator. But it has well-defined inputs and outputs.

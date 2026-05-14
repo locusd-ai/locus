@@ -178,6 +178,9 @@ impl DuckDbRegistry {
             BitmapCategory::Link => "link",
             BitmapCategory::Type => "type",
             BitmapCategory::Source => "source",
+            BitmapCategory::Enrichment => "enrichment",
+            BitmapCategory::Code => "code",
+            BitmapCategory::Custom => "custom",
         }
     }
 
@@ -188,6 +191,9 @@ impl DuckDbRegistry {
             "link" => BitmapCategory::Link,
             "type" => BitmapCategory::Type,
             "source" => BitmapCategory::Source,
+            "enrichment" => BitmapCategory::Enrichment,
+            "code" => BitmapCategory::Code,
+            "custom" => BitmapCategory::Custom,
             _ => BitmapCategory::Tag,
         }
     }

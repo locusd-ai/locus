@@ -46,6 +46,12 @@ pub enum BitmapCategory {
     Link,
     Type,
     Source,
+    /// Inferred keys from enrichment taggers (topic:*, concept:*, etc.)
+    Enrichment,
+    /// Keys from code parser (lang:*, kind:*, visibility:*, etc.)
+    Code,
+    /// Keys from user-defined custom taggers
+    Custom,
 }
 
 // ── Chunk model ──────────────────────────────────────────────────
