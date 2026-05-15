@@ -15,6 +15,7 @@ biem-bitmap = { workspace = true }
 biem-registry = { workspace = true }
 biem-ingest = { workspace = true }
 biem-parser = { workspace = true }
+biem-code = { workspace = true }
 biem-enrich = { workspace = true }
 biem-embed = { workspace = true }
 clap = { workspace = true }

@@ -17,6 +17,7 @@ use biem_enrich::builtin::{ComplexityTagger, ConventionTagger, SizeTagger, Topic
 use biem_enrich::{InMemoryTaggerCache, TagPipeline, FsTaggerCache, load_yaml_taggers};
 use biem_ingest::IngestionPipeline;
 use biem_parser::markdown::MarkdownParser;
+use biem_code::CodeParser;
 use biem_query::BitmapQueryEngine;
 use biem_query::SemanticQueryRequest;
 use biem_registry::duckdb::DuckDbRegistry;
@@ -43,13 +44,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Register a vault and run initial index
+    /// Register a source and run initial index
     Init {
-        /// Path to the vault directory
+        /// Path to the source directory
         path: PathBuf,
         /// Store state inside the vault (.biem/) instead of globally
         #[arg(long)]
         local: bool,
+        /// Source type: obsidian (default) or code
+        #[arg(long, value_name = "TYPE", default_value = "obsidian")]
+        r#type: String,
     },
     /// Show configuration (registered vaults)
     Config,
@@ -129,7 +133,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { ref path, local } => cmd_init(path, local),
+        Commands::Init { ref path, local, ref r#type } => cmd_init(path, local, r#type),
         Commands::Config => cmd_config(),
         Commands::Index { ref path } => cmd_index(path, &cli),
         Commands::Search { ref filters, limit, ref vault } => cmd_search(vault.as_ref(), filters, limit, &cli),
@@ -206,7 +210,7 @@ fn build_pipeline_and_index(
         // In-memory mode: must index on the fly
         let vault = vault.context("--vault is required with --memory mode")?;
         let mut pipeline = IngestionPipeline::new(
-            vec![Box::new(MarkdownParser)],
+            vec![Box::new(MarkdownParser), Box::new(CodeParser::new())],
             r,
             b,
         );
@@ -229,9 +233,23 @@ fn build_pipeline_and_index(
 
 // ── Commands ─────────────────────────────────────────────────────
 
-fn cmd_init(path: &PathBuf, local: bool) -> Result<()> {
+/// Build the parser list for a given source type.
+fn parsers_for_source(source_type: &SourceType) -> Vec<Box<dyn biem_core::parser::Parser>> {
+    match source_type {
+        SourceType::Obsidian => vec![Box::new(MarkdownParser)],
+        SourceType::Code => vec![Box::new(CodeParser::new())],
+    }
+}
+
+fn cmd_init(path: &PathBuf, local: bool, source_type_str: &str) -> Result<()> {
     let vault_path = path.canonicalize()
-        .with_context(|| format!("vault path does not exist: {}", path.display()))?;
+        .with_context(|| format!("path does not exist: {}", path.display()))?;
+
+    let source_type = match source_type_str {
+        "obsidian" => SourceType::Obsidian,
+        "code" => SourceType::Code,
+        other => anyhow::bail!("unknown source type '{}' — use 'obsidian' or 'code'", other),
+    };
 
     let biem_dir = config::default_config_dir()
         .context("could not determine BIEM config directory")?;
@@ -239,21 +257,22 @@ fn cmd_init(path: &PathBuf, local: bool) -> Result<()> {
 
     let storage = if local { StorageMode::Local } else { StorageMode::Global };
 
-    let (name, entry) = config::register_source(&vault_path, SourceType::Obsidian, storage, &biem_dir, &mut cfg)
+    let (name, entry) = config::register_source(&vault_path, source_type.clone(), storage, &biem_dir, &mut cfg)
         .with_context(|| format!("failed to register source: {}", vault_path.display()))?;
 
     config::save_config(&cfg)
         .context("failed to save config")?;
 
-    println!("✓ Registered vault '{}' at {}", name, vault_path.display());
+    println!("✓ Registered source '{}' ({:?}) at {}", name, source_type, vault_path.display());
     println!("  storage: {:?}", entry.storage);
     println!("  data_dir: {}", entry.data_dir.display());
 
     // Run initial bulk index
     let (registry, bitmap_store) = open_persistent_stores(&entry.data_dir)?;
     let tag_pipeline = build_tag_pipeline(Some(&entry.data_dir));
+    let parsers = parsers_for_source(&source_type);
     let mut pipeline = IngestionPipeline::new(
-        vec![Box::new(MarkdownParser)],
+        parsers,
         registry,
         bitmap_store,
     ).with_tag_pipeline(tag_pipeline);
@@ -281,6 +300,7 @@ fn cmd_config() -> Result<()> {
         println!();
         println!("  [{}]", name);
         println!("    path:     {}", entry.path.display());
+        println!("    type:     {:?}", entry.source_type);
         println!("    storage:  {:?}", entry.storage);
         println!("    data_dir: {}", entry.data_dir.display());
     }
@@ -305,9 +325,16 @@ fn cmd_index(path: &PathBuf, cli: &Cli) -> Result<()> {
         open_persistent_stores(data_dir_resolved.as_ref().unwrap())?
     };
 
+    // Determine source type from config
+    let cfg = config::load_config().unwrap_or_default();
+    let source_type: SourceType = config::resolve_source(path, &cfg)
+        .map(|e| e.source_type.clone().into())
+        .unwrap_or(SourceType::Obsidian);
+    let parsers = parsers_for_source(&source_type);
+
     let tag_pipeline = build_tag_pipeline(data_dir_resolved.as_ref());
     let mut pipeline = IngestionPipeline::new(
-        vec![Box::new(MarkdownParser)],
+        parsers,
         registry,
         bitmap_store,
     ).with_tag_pipeline(tag_pipeline);

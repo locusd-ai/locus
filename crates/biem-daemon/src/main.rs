@@ -11,6 +11,13 @@ use biem_bitmap::memory::InMemoryBitmapStore;
 use biem_core::types::ChangeEvent;
 use biem_ingest::IngestionPipeline;
 use biem_parser::markdown::MarkdownParser;
+use biem_code::CodeParser;
+
+/// Build a parser list that handles both markdown and code files.
+fn all_parsers() -> Vec<Box<dyn biem_core::parser::Parser>> {
+    vec![Box::new(MarkdownParser), Box::new(CodeParser::new())]
+}
+
 use biem_query::BitmapQueryEngine;
 use biem_registry::duckdb::DuckDbRegistry;
 use biem_registry::memory::InMemoryRegistry;
@@ -99,7 +106,7 @@ async fn main() -> Result<()> {
         if cli.initial_index {
             info!("performing initial bulk index");
             let mut pipeline = IngestionPipeline::new(
-                vec![Box::new(MarkdownParser)],
+                all_parsers(),
                 registry,
                 bitmap_store,
             );
@@ -172,7 +179,7 @@ async fn main() -> Result<()> {
     // Initial bulk index (watcher mode)
     if cli.initial_index {
         let mut pipeline = IngestionPipeline::new(
-            vec![Box::new(MarkdownParser)],
+            all_parsers(),
             registry,
             bitmap_store,
         );
@@ -194,7 +201,7 @@ async fn main() -> Result<()> {
     }
 
     let pipeline = IngestionPipeline::new(
-        vec![Box::new(MarkdownParser)],
+        all_parsers(),
         registry,
         bitmap_store,
     );

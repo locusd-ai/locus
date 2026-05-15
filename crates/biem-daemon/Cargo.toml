@@ -16,6 +16,7 @@ biem-watcher = { workspace = true }
 biem-bitmap = { workspace = true }
 biem-registry = { workspace = true }
 biem-parser = { workspace = true }
+biem-code = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

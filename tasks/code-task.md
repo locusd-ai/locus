@@ -85,11 +85,11 @@
 **Commit**: `feat(ingest): add .biemignore support`
 
 ### Step 5 — `biem init --type code` and multi-repo registration
-- [ ] `biem init <path> --type code` registers a code source
-- [ ] Config stores `source_type: Code` in `SourceEntry`
-- [ ] Ingestion pipeline selects `CodeParser` when `source_type == Code`
-- [ ] Support multiple sources (both Obsidian vaults and code repos in same config)
-- [ ] `biem status` shows per-source stats
+- [x] `biem init <path> --type code` registers a code source
+- [x] Config stores `source_type: Code` in `SourceEntry`
+- [x] Ingestion pipeline selects `CodeParser` when `source_type == Code`
+- [x] Support multiple sources (both Obsidian vaults and code repos in same config)
+- [x] `biem status` shows per-source stats
 - [ ] Integration test: init a code repo, verify it indexes `.rs` files
 
 **Commit**: `feat(cli): add code source registration with biem init --type code`
