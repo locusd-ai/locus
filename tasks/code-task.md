@@ -95,14 +95,14 @@
 **Commit**: `feat(cli): add code source registration with biem init --type code`
 
 ### Step 6 — TypeScript grammar
-- [ ] Add `tree-sitter-typescript` dependency
-- [ ] Register `.ts` and `.tsx` extensions
-- [ ] Extract: `function`, `class`, `interface`, `type`, `import`, `export`
-- [ ] Map to `ChunkKind` variants (Function, Class, Module, Import, Constant)
-- [ ] Extract metadata: export/default-export → `visibility:public`
-- [ ] Generate `import:react`, `import:express` etc. from import statements
-- [ ] Unit test: parse a TS file → correct chunks
-- [ ] Unit test: JSX/TSX files parse without errors
+- [x] Add `tree-sitter-typescript` dependency
+- [x] Register `.ts` and `.tsx` extensions
+- [x] Extract: `function`, `class`, `interface`, `type`, `import`, `export`
+- [x] Map to `ChunkKind` variants (Function, Class, Module, Import, Constant)
+- [x] Extract metadata: export/default-export → `visibility:public`
+- [x] Generate `import:react`, `import:express` etc. from import statements
+- [x] Unit test: parse a TS file → correct chunks
+- [x] Unit test: JSX/TSX files parse without errors
 
 **Commit**: `feat(code): add TypeScript grammar support`
 

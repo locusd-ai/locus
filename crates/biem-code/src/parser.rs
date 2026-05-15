@@ -22,6 +22,13 @@ impl CodeParser {
     pub fn new() -> Self {
         let mut languages = HashMap::new();
         languages.insert("rs".into(), tree_sitter_rust::LANGUAGE.into());
+        let ts_lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        let tsx_lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
+        languages.insert("ts".into(), ts_lang.clone());
+        languages.insert("tsx".into(), tsx_lang);
+        // Also register .js/.jsx using the TSX grammar (superset)
+        languages.insert("js".into(), ts_lang.clone());
+        languages.insert("jsx".into(), ts_lang);
         Self { languages }
     }
 
@@ -120,9 +127,13 @@ impl Parser for CodeParser {
         // Add language tag
         tags.push(format!("lang:{lang_name}"));
 
-        // Walk the AST root children
+        // Walk the AST root children based on language
         let root = tree.root_node();
-        walk_rust_nodes(root, source, lang_name, 0, &mut chunks, &mut tags, &mut imports);
+        match lang_name {
+            "rust" => walk_rust_nodes(root, source, lang_name, 0, &mut chunks, &mut tags, &mut imports),
+            "typescript" | "javascript" => walk_typescript_nodes(root, source, lang_name, 0, &mut chunks, &mut tags, &mut imports),
+            _ => {}
+        }
 
         let auto_type = Self::detect_doc_type(path);
 
@@ -384,6 +395,382 @@ fn extract_function_signature(node: &tree_sitter::Node, source: &str) -> String 
     text.lines().next().unwrap_or("").to_string()
 }
 
+// ── TypeScript / JavaScript AST walking ──────────────────────────
+
+/// Walk TypeScript/JavaScript AST nodes and extract chunks, tags, and imports.
+fn walk_typescript_nodes(
+    node: tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+    chunks: &mut Vec<Chunk>,
+    tags: &mut Vec<String>,
+    imports: &mut Vec<LinkRef>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            // function declaration: `function foo() {}`
+            "function_declaration" => {
+                if let Some(chunk) = extract_ts_function(&child, source, lang, depth) {
+                    add_tag_once(tags, "kind:function");
+                    if ts_is_async(&child) {
+                        add_tag_once(tags, "async:true");
+                    }
+                    chunks.push(chunk);
+                }
+            }
+            // arrow function in variable declaration is handled via lexical_declaration / variable_declaration
+            "lexical_declaration" | "variable_declaration" => {
+                extract_ts_variable_declarations(&child, source, lang, depth, chunks, tags);
+            }
+            // class declaration
+            "class_declaration" => {
+                if let Some(chunk) = extract_ts_class(&child, source, lang, depth) {
+                    add_tag_once(tags, "kind:class");
+                    chunks.push(chunk);
+                }
+                // Extract methods inside the class body
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_ts_class_members(&body, source, lang, depth + 1, chunks, tags);
+                }
+            }
+            // interface declaration
+            "interface_declaration" => {
+                if let Some(chunk) = extract_ts_named(&child, source, lang, ChunkKind::Class, depth) {
+                    add_tag_once(tags, "kind:interface");
+                    chunks.push(chunk);
+                }
+            }
+            // type alias: `type Foo = ...`
+            "type_alias_declaration" => {
+                if let Some(chunk) = extract_ts_named(&child, source, lang, ChunkKind::Constant, depth) {
+                    add_tag_once(tags, "kind:type");
+                    chunks.push(chunk);
+                }
+            }
+            // enum declaration (TS enums)
+            "enum_declaration" => {
+                if let Some(chunk) = extract_ts_named(&child, source, lang, ChunkKind::Class, depth) {
+                    add_tag_once(tags, "kind:enum");
+                    chunks.push(chunk);
+                }
+            }
+            // import statement
+            "import_statement" => {
+                extract_ts_import(&child, source, imports);
+            }
+            // export statement — may wrap a declaration
+            "export_statement" => {
+                walk_ts_export(&child, source, lang, depth, chunks, tags, imports);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Extract a TS/JS function declaration.
+fn extract_ts_function(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+) -> Option<Chunk> {
+    let name = node.child_by_field_name("name")?;
+    let label = name.utf8_text(source.as_bytes()).ok()?.to_string();
+    let vis = ts_node_visibility(node);
+    let sig = extract_function_signature(node, source);
+
+    Some(Chunk {
+        byte_range: node.byte_range(),
+        kind: ChunkKind::Function,
+        label: Some(label),
+        depth,
+        metadata: ChunkMetadata {
+            signature: Some(sig),
+            language: Some(lang.to_string()),
+            visibility: Some(vis),
+        },
+    })
+}
+
+/// Extract a named TS/JS declaration (interface, type alias, enum).
+fn extract_ts_named(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    kind: ChunkKind,
+    depth: u8,
+) -> Option<Chunk> {
+    let name = node.child_by_field_name("name")?;
+    let label = name.utf8_text(source.as_bytes()).ok()?.to_string();
+    let vis = ts_node_visibility(node);
+
+    Some(Chunk {
+        byte_range: node.byte_range(),
+        kind,
+        label: Some(label),
+        depth,
+        metadata: ChunkMetadata {
+            signature: None,
+            language: Some(lang.to_string()),
+            visibility: Some(vis),
+        },
+    })
+}
+
+/// Extract a class declaration.
+fn extract_ts_class(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+) -> Option<Chunk> {
+    let name = node.child_by_field_name("name")?;
+    let label = name.utf8_text(source.as_bytes()).ok()?.to_string();
+    let vis = ts_node_visibility(node);
+
+    Some(Chunk {
+        byte_range: node.byte_range(),
+        kind: ChunkKind::Class,
+        label: Some(label),
+        depth,
+        metadata: ChunkMetadata {
+            signature: None,
+            language: Some(lang.to_string()),
+            visibility: Some(vis),
+        },
+    })
+}
+
+/// Extract class methods from a class body.
+fn extract_ts_class_members(
+    body: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+    chunks: &mut Vec<Chunk>,
+    tags: &mut Vec<String>,
+) {
+    let mut cursor = body.walk();
+    for child in body.children(&mut cursor) {
+        if child.kind() == "method_definition" || child.kind() == "public_field_definition" {
+            if let Some(name) = child.child_by_field_name("name") {
+                let label = name.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                if !label.is_empty() && child.kind() == "method_definition" {
+                    let sig = extract_function_signature(&child, source);
+                    chunks.push(Chunk {
+                        byte_range: child.byte_range(),
+                        kind: ChunkKind::Method,
+                        label: Some(label),
+                        depth,
+                        metadata: ChunkMetadata {
+                            signature: Some(sig),
+                            language: Some(lang.to_string()),
+                            visibility: Some(Visibility::Public),
+                        },
+                    });
+                    add_tag_once(tags, "kind:method");
+                }
+            }
+        }
+    }
+}
+
+/// Extract variable declarations — detects arrow functions and constants.
+fn extract_ts_variable_declarations(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+    chunks: &mut Vec<Chunk>,
+    tags: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "variable_declarator" {
+            let name = child.child_by_field_name("name");
+            let value = child.child_by_field_name("value");
+
+            if let (Some(name_node), Some(value_node)) = (name, value) {
+                let label = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                if label.is_empty() {
+                    continue;
+                }
+
+                let is_arrow = value_node.kind() == "arrow_function";
+                let is_fn_expr = value_node.kind() == "function" || value_node.kind() == "function_expression";
+
+                if is_arrow || is_fn_expr {
+                    let vis = ts_node_visibility(node);
+                    let sig = extract_function_signature(node, source);
+                    chunks.push(Chunk {
+                        byte_range: node.byte_range(),
+                        kind: ChunkKind::Function,
+                        label: Some(label),
+                        depth,
+                        metadata: ChunkMetadata {
+                            signature: Some(sig),
+                            language: Some(lang.to_string()),
+                            visibility: Some(vis),
+                        },
+                    });
+                    add_tag_once(tags, "kind:function");
+                    if is_arrow && ts_is_async(&value_node) {
+                        add_tag_once(tags, "async:true");
+                    }
+                } else {
+                    // Regular constant
+                    let vis = ts_node_visibility(node);
+                    chunks.push(Chunk {
+                        byte_range: node.byte_range(),
+                        kind: ChunkKind::Constant,
+                        label: Some(label),
+                        depth,
+                        metadata: ChunkMetadata {
+                            signature: None,
+                            language: Some(lang.to_string()),
+                            visibility: Some(vis),
+                        },
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Extract import source from an import statement.
+/// `import { Foo } from 'bar'` → target = "bar"
+fn extract_ts_import(node: &tree_sitter::Node, source: &str, imports: &mut Vec<LinkRef>) {
+    let text = node.utf8_text(source.as_bytes()).unwrap_or("");
+
+    // Find the source string node
+    if let Some(src) = node.child_by_field_name("source") {
+        let raw = src.utf8_text(source.as_bytes()).unwrap_or("");
+        // Strip quotes
+        let module = raw.trim_matches(|c| c == '\'' || c == '"');
+        if !module.is_empty() {
+            // For scoped packages like @scope/pkg, keep the full name
+            // For relative imports, skip (start with . or ..)
+            if !module.starts_with('.') {
+                // Extract package name (first segment or @scope/pkg)
+                let pkg = if module.starts_with('@') {
+                    // @scope/pkg/sub → @scope/pkg
+                    let parts: Vec<&str> = module.splitn(3, '/').collect();
+                    if parts.len() >= 2 {
+                        format!("{}/{}", parts[0], parts[1])
+                    } else {
+                        module.to_string()
+                    }
+                } else {
+                    // pkg/sub → pkg
+                    module.split('/').next().unwrap_or(module).to_string()
+                };
+
+                imports.push(LinkRef {
+                    target: pkg,
+                    display: Some(text.trim().to_string()),
+                    byte_offset: node.start_byte(),
+                });
+            }
+        }
+    }
+}
+
+/// Handle export statements — they wrap declarations.
+fn walk_ts_export(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+    chunks: &mut Vec<Chunk>,
+    tags: &mut Vec<String>,
+    imports: &mut Vec<LinkRef>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_declaration" => {
+                if let Some(mut chunk) = extract_ts_function(&child, source, lang, depth) {
+                    chunk.metadata.visibility = Some(Visibility::Public);
+                    add_tag_once(tags, "kind:function");
+                    chunks.push(chunk);
+                }
+            }
+            "class_declaration" => {
+                if let Some(mut chunk) = extract_ts_class(&child, source, lang, depth) {
+                    chunk.metadata.visibility = Some(Visibility::Public);
+                    add_tag_once(tags, "kind:class");
+                    chunks.push(chunk);
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_ts_class_members(&body, source, lang, depth + 1, chunks, tags);
+                }
+            }
+            "interface_declaration" => {
+                if let Some(mut chunk) = extract_ts_named(&child, source, lang, ChunkKind::Class, depth) {
+                    chunk.metadata.visibility = Some(Visibility::Public);
+                    add_tag_once(tags, "kind:interface");
+                    chunks.push(chunk);
+                }
+            }
+            "type_alias_declaration" => {
+                if let Some(mut chunk) = extract_ts_named(&child, source, lang, ChunkKind::Constant, depth) {
+                    chunk.metadata.visibility = Some(Visibility::Public);
+                    add_tag_once(tags, "kind:type");
+                    chunks.push(chunk);
+                }
+            }
+            "enum_declaration" => {
+                if let Some(mut chunk) = extract_ts_named(&child, source, lang, ChunkKind::Class, depth) {
+                    chunk.metadata.visibility = Some(Visibility::Public);
+                    add_tag_once(tags, "kind:enum");
+                    chunks.push(chunk);
+                }
+            }
+            "lexical_declaration" | "variable_declaration" => {
+                extract_ts_variable_declarations(&child, source, lang, depth, chunks, tags);
+                // Mark last-added chunks as exported (public)
+                if let Some(last) = chunks.last_mut() {
+                    last.metadata.visibility = Some(Visibility::Public);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Determine visibility for TS/JS nodes.
+/// In TS/JS, top-level exported items are public; everything else is private (module-scoped).
+fn ts_node_visibility(node: &tree_sitter::Node) -> Visibility {
+    // Check if parent is an export_statement
+    if let Some(parent) = node.parent() {
+        if parent.kind() == "export_statement" {
+            return Visibility::Public;
+        }
+    }
+    Visibility::Private
+}
+
+/// Check if a TS/JS function/arrow is async.
+fn ts_is_async(node: &tree_sitter::Node) -> bool {
+    // For arrow_function and function_declaration, check for "async" keyword child
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "async" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Helper: add a tag only if not already present.
+fn add_tag_once(tags: &mut Vec<String>, tag: &str) {
+    if !tags.iter().any(|t| t == tag) {
+        tags.push(tag.to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -555,5 +942,172 @@ static COUNTER: u32 = 0;
 
         let function = result.chunks.iter().find(|c| c.kind == ChunkKind::Function).unwrap();
         assert_eq!(function.depth, 1);
+    }
+
+    // ── TypeScript tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_can_parse_typescript_files() {
+        let parser = CodeParser::new();
+        assert!(parser.can_parse(Path::new("src/index.ts")));
+        assert!(parser.can_parse(Path::new("src/App.tsx")));
+        assert!(parser.can_parse(Path::new("src/util.js")));
+        assert!(parser.can_parse(Path::new("src/Component.jsx")));
+    }
+
+    #[test]
+    fn test_parse_ts_function_and_export() {
+        let parser = CodeParser::new();
+        let content = b"function internal() { return 1; }
+export function greet(name: string): string {
+    return `Hello, ${name}!`;
+}
+";
+        let result = parser.parse(Path::new("utils.ts"), content).unwrap();
+
+        assert!(result.tags.contains(&"lang:typescript".to_string()));
+        assert!(result.tags.contains(&"kind:function".to_string()));
+
+        let fns: Vec<_> = result.chunks.iter().filter(|c| c.kind == ChunkKind::Function).collect();
+        assert_eq!(fns.len(), 2);
+
+        let internal = fns.iter().find(|c| c.label.as_deref() == Some("internal")).unwrap();
+        assert_eq!(internal.metadata.visibility, Some(Visibility::Private));
+
+        let greet = fns.iter().find(|c| c.label.as_deref() == Some("greet")).unwrap();
+        assert_eq!(greet.metadata.visibility, Some(Visibility::Public));
+    }
+
+    #[test]
+    fn test_parse_ts_class_with_methods() {
+        let parser = CodeParser::new();
+        let content = b"export class UserService {
+    constructor(private db: Database) {}
+
+    async getUser(id: string): Promise<User> {
+        return this.db.find(id);
+    }
+
+    deleteUser(id: string): void {
+        this.db.delete(id);
+    }
+}
+";
+        let result = parser.parse(Path::new("service.ts"), content).unwrap();
+
+        assert!(result.tags.contains(&"kind:class".to_string()));
+        assert!(result.tags.contains(&"kind:method".to_string()));
+
+        let class = result.chunks.iter().find(|c| c.kind == ChunkKind::Class).unwrap();
+        assert_eq!(class.label.as_deref(), Some("UserService"));
+        assert_eq!(class.metadata.visibility, Some(Visibility::Public));
+
+        let methods: Vec<_> = result.chunks.iter().filter(|c| c.kind == ChunkKind::Method).collect();
+        assert!(methods.len() >= 2, "expected at least 2 methods, got {}", methods.len());
+    }
+
+    #[test]
+    fn test_parse_ts_interface_and_type() {
+        let parser = CodeParser::new();
+        let content = b"export interface User {
+    id: string;
+    name: string;
+}
+
+export type UserId = string;
+
+interface Internal {
+    secret: boolean;
+}
+";
+        let result = parser.parse(Path::new("types.ts"), content).unwrap();
+
+        assert!(result.tags.contains(&"kind:interface".to_string()));
+        assert!(result.tags.contains(&"kind:type".to_string()));
+
+        let user = result.chunks.iter().find(|c| c.label.as_deref() == Some("User")).unwrap();
+        assert_eq!(user.metadata.visibility, Some(Visibility::Public));
+
+        let internal = result.chunks.iter().find(|c| c.label.as_deref() == Some("Internal")).unwrap();
+        assert_eq!(internal.metadata.visibility, Some(Visibility::Private));
+    }
+
+    #[test]
+    fn test_parse_ts_imports() {
+        let parser = CodeParser::new();
+        let content = b"import { useState, useEffect } from 'react';
+import express from 'express';
+import { Foo } from './local';
+import { Bar } from '@scope/pkg';
+
+export function App() { return null; }
+";
+        let result = parser.parse(Path::new("App.tsx"), content).unwrap();
+
+        let targets: Vec<_> = result.links.iter().map(|l| l.target.as_str()).collect();
+        assert!(targets.contains(&"react"), "should have react import");
+        assert!(targets.contains(&"express"), "should have express import");
+        assert!(targets.contains(&"@scope/pkg"), "should have scoped import");
+        // Relative imports should be skipped
+        assert!(!targets.iter().any(|t| t.starts_with(".")), "should skip relative imports");
+    }
+
+    #[test]
+    fn test_parse_ts_arrow_functions() {
+        let parser = CodeParser::new();
+        let content = b"export const fetchData = async (url: string) => {
+    const res = await fetch(url);
+    return res.json();
+};
+
+const helper = () => 42;
+";
+        let result = parser.parse(Path::new("api.ts"), content).unwrap();
+
+        assert!(result.tags.contains(&"kind:function".to_string()));
+
+        let fns: Vec<_> = result.chunks.iter().filter(|c| c.kind == ChunkKind::Function).collect();
+        assert_eq!(fns.len(), 2);
+
+        let fetch = fns.iter().find(|c| c.label.as_deref() == Some("fetchData")).unwrap();
+        assert_eq!(fetch.metadata.visibility, Some(Visibility::Public));
+
+        let helper = fns.iter().find(|c| c.label.as_deref() == Some("helper")).unwrap();
+        assert_eq!(helper.metadata.visibility, Some(Visibility::Private));
+    }
+
+    #[test]
+    fn test_parse_tsx_without_errors() {
+        let parser = CodeParser::new();
+        let content = b"import React from 'react';
+
+interface Props {
+    name: string;
+}
+
+export function Greeting({ name }: Props) {
+    return <div>Hello, {name}!</div>;
+}
+";
+        let result = parser.parse(Path::new("Greeting.tsx"), content).unwrap();
+        assert!(result.tags.contains(&"lang:typescript".to_string()));
+        assert!(!result.chunks.is_empty(), "should extract chunks from TSX");
+    }
+
+    #[test]
+    fn test_parse_ts_enum() {
+        let parser = CodeParser::new();
+        let content = b"export enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+";
+        let result = parser.parse(Path::new("enums.ts"), content).unwrap();
+        assert!(result.tags.contains(&"kind:enum".to_string()));
+        let e = result.chunks.iter().find(|c| c.label.as_deref() == Some("Direction")).unwrap();
+        assert_eq!(e.kind, ChunkKind::Class);
+        assert_eq!(e.metadata.visibility, Some(Visibility::Public));
     }
 }
