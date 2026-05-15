@@ -13,7 +13,7 @@ use biem_core::registry::{
 use biem_core::semantic::{Embedder, VectorStore};
 use biem_core::types::{
     BitmapKey, ChangeEvent, ChangeKind, DocId, DocType,
-    ParseResult, SourceType,
+    ParseResult, SourceType, Visibility,
 };
 use biem_enrich::TagPipeline;
 
@@ -180,6 +180,16 @@ impl IngestionPipeline {
         format!("source:{label}")
     }
 
+    /// Infer the source type from parse result tags.
+    /// If any tag starts with "lang:", this is a code file; otherwise Obsidian.
+    fn infer_source_type(result: &ParseResult) -> SourceType {
+        if result.tags.iter().any(|t| t.starts_with("lang:")) {
+            SourceType::Code
+        } else {
+            SourceType::Obsidian
+        }
+    }
+
     /// Collect all bitmap keys for a parse result + metadata.
     fn bitmap_keys_for(
         path: &Path,
@@ -188,7 +198,13 @@ impl IngestionPipeline {
     ) -> Vec<BitmapKey> {
         let mut keys = Vec::new();
         for tag in &result.tags {
-            keys.push(Self::tag_key(tag));
+            // Tags that already contain a namespace prefix (e.g. "lang:rust", "kind:function")
+            // are used as-is. Tags without a prefix get the "tag:" namespace.
+            if tag.contains(':') {
+                keys.push(tag.clone());
+            } else {
+                keys.push(Self::tag_key(tag));
+            }
         }
         for link in &result.links {
             keys.push(Self::link_key(&link.target));
@@ -198,6 +214,31 @@ impl IngestionPipeline {
         if let Some(ref nt) = result.auto_type {
             keys.push(Self::type_key(nt));
         }
+
+        // Code-specific: generate import: and visibility: keys from chunks
+        if *source == SourceType::Code {
+            // Import keys from links (code uses LinkRef for imports)
+            for link in &result.links {
+                let import_key = format!("import:{}", link.target);
+                if !keys.contains(&import_key) {
+                    keys.push(import_key);
+                }
+            }
+            // Visibility keys from chunk metadata
+            for chunk in &result.chunks {
+                if let Some(ref vis) = chunk.metadata.visibility {
+                    let vis_key = match vis {
+                        Visibility::Public => "visibility:public",
+                        Visibility::Private => "visibility:private",
+                        Visibility::Internal => "visibility:internal",
+                    };
+                    if !keys.contains(&vis_key.to_string()) {
+                        keys.push(vis_key.to_string());
+                    }
+                }
+            }
+        }
+
         keys
     }
 
@@ -290,6 +331,13 @@ impl IngestionPipeline {
     /// Process a single filesystem change event.
     #[instrument(skip(self), fields(path = %event.path.display()))]
     pub fn process_event(&mut self, event: &ChangeEvent) -> Result<IngestResult, IngestError> {
+        // Skip ignored paths
+        if Self::is_ignored(&event.path) {
+            return Ok(IngestResult {
+                action: IngestAction::Skipped,
+                bitmaps_updated: 0,
+            });
+        }
         match &event.kind {
             ChangeKind::Created => self.handle_created(&event.path),
             ChangeKind::Modified => self.handle_modified(&event.path),
@@ -307,7 +355,7 @@ impl IngestionPipeline {
         let hash = blake3::hash(&content);
         let result = parser.parse(path, &content)?;
 
-        let source = SourceType::Obsidian; // Phase 1: only Obsidian
+        let source = Self::infer_source_type(&result);
         let doc_id = self.registry.insert_doc(NewDoc {
             file_path: path.to_path_buf(),
             source_type: source.clone(),
@@ -365,7 +413,7 @@ impl IngestionPipeline {
         }
 
         let result = parser.parse(path, &content)?;
-        let source = SourceType::Obsidian;
+        let source = Self::infer_source_type(&result);
 
         // Compute old bitmap keys from the stored record
         // We need to reconstruct what the old keys were; we re-parse isn't possible
@@ -500,7 +548,6 @@ impl IngestionPipeline {
     #[instrument(skip(self))]
     pub fn bulk_index(&mut self, root: &Path) -> Result<BulkIndexResult, IngestError> {
         let start = Instant::now();
-        let source = SourceType::Obsidian;
 
         // Collect all parseable files on disk
         let mut files: Vec<PathBuf> = Vec::new();
@@ -538,6 +585,7 @@ impl IngestionPipeline {
                     // Unchanged — skip, but still collect bitmap keys so bulk_put is correct
                     let parser = self.find_parser(path).expect("already filtered");
                     let result = parser.parse(path, &content)?;
+                    let source = Self::infer_source_type(&result);
                     let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
                     for key in keys {
                         all_bitmap_entries
@@ -550,6 +598,7 @@ impl IngestionPipeline {
                     // Changed — update
                     let parser = self.find_parser(path).expect("already filtered");
                     let result = parser.parse(path, &content)?;
+                    let source = Self::infer_source_type(&result);
 
                     self.registry.update_doc(existing.doc_id, hash_bytes, result.auto_type.clone())?;
                     let chunks = Self::chunks_to_new(existing.doc_id, &result);
@@ -573,6 +622,7 @@ impl IngestionPipeline {
                 // New file — insert
                 let parser = self.find_parser(path).expect("already filtered");
                 let result = parser.parse(path, &content)?;
+                let source = Self::infer_source_type(&result);
 
                 let doc_id = self.registry.insert_doc(NewDoc {
                     file_path: path.clone(),
@@ -637,19 +687,76 @@ impl IngestionPipeline {
     }
 
     fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
-        if !dir.is_dir() {
-            return Ok(());
-        }
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                Self::walk_dir(&path, out)?;
-            } else {
-                out.push(path);
+        use ignore::WalkBuilder;
+
+        let walker = WalkBuilder::new(dir)
+            // Respect .gitignore
+            .git_ignore(true)
+            .git_global(false)
+            .git_exclude(false)
+            // Add custom .biemignore
+            .add_custom_ignore_filename(".biemignore")
+            // Add default ignores
+            .filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                // Skip common build/dependency directories even without ignore files
+                !matches!(
+                    name.as_ref(),
+                    "target" | "node_modules" | "__pycache__" | ".git" | ".hg" | ".svn"
+                        | "dist" | "build" | ".tox" | ".mypy_cache" | ".pytest_cache"
+                )
+            })
+            .build();
+
+        for result in walker {
+            match result {
+                Ok(entry) => {
+                    let path = entry.into_path();
+                    if path.is_file() {
+                        out.push(path);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "walk error, skipping entry");
+                }
             }
         }
         Ok(())
+    }
+
+    /// Check if a path should be ignored based on default patterns and .biemignore.
+    fn is_ignored(path: &Path) -> bool {
+        // Check against default ignore directory names
+        for component in path.components() {
+            let name = component.as_os_str().to_string_lossy();
+            if matches!(
+                name.as_ref(),
+                "target" | "node_modules" | "__pycache__" | ".git" | ".hg" | ".svn"
+                    | "dist" | "build" | ".tox" | ".mypy_cache" | ".pytest_cache"
+            ) {
+                return true;
+            }
+        }
+
+        // Check for .biemignore in parent directories
+        if let Some(parent) = path.parent() {
+            let ignore_file = parent.join(".biemignore");
+            if ignore_file.exists() {
+                if let Ok(contents) = fs::read_to_string(&ignore_file) {
+                    let mut builder = ignore::gitignore::GitignoreBuilder::new(parent);
+                    for line in contents.lines() {
+                        let _ = builder.add_line(None, line);
+                    }
+                    if let Ok(gitignore) = builder.build() {
+                        if gitignore.matched(path, path.is_dir()).is_ignore() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     // ── Compaction ───────────────────────────────────────────────

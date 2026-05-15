@@ -21,6 +21,7 @@ rand = { workspace = true }
 tempfile = "3"
 duckdb = { workspace = true }
 petgraph = "0.7"
+ignore = "0.4"
 
 [[bin]]
 name = "biem-scale-test"
@@ -28,6 +29,7 @@ path = "src/bin/biem_scale_test.rs"
 
 [dev-dependencies]
 tempfile = "3"
+biem-code = { workspace = true }
 criterion = { workspace = true }
 rand = { workspace = true }
 biem-core = { workspace = true }

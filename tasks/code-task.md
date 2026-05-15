@@ -5,82 +5,82 @@
 ## Pre-work: Type system alignment (from 006-phase2-alignment.md)
 
 ### Step 0a — Extend `SourceType` and rename `VaultEntry` → `SourceEntry`
-- [ ] Add `Code` variant to `SourceType` in `biem-core/src/types.rs`
-- [ ] Update `source_key()` match in `biem-ingest/src/pipeline.rs`
-- [ ] Rename `VaultEntry` → `SourceEntry`, add `source_type: SourceType` field in `biem-core/src/config.rs`
-- [ ] Rename `vaults` → `sources` in `BiemConfig`
-- [ ] Update `register_vault` → `register_source`, `resolve_vault` → `resolve_source`
-- [ ] Update state directory: `~/.biem/sources/<name>/` instead of `~/.biem/vaults/<hash>/`
-- [ ] Update all callers in `biem-cli`, `biem-daemon`
-- [ ] Update config TOML format: `[vaults.*]` → `[sources.*]`
-- [ ] Add migration note for existing configs
-- [ ] `cargo test` passes, `cargo check` zero warnings
+- [x] Add `Code` variant to `SourceType` in `biem-core/src/types.rs`
+- [x] Update `source_key()` match in `biem-ingest/src/pipeline.rs`
+- [x] Rename `VaultEntry` → `SourceEntry`, add `source_type: SourceType` field in `biem-core/src/config.rs`
+- [x] Rename `vaults` → `sources` in `BiemConfig`
+- [x] Update `register_vault` → `register_source`, `resolve_vault` → `resolve_source`
+- [x] Update state directory: `~/.biem/sources/<name>/` instead of `~/.biem/vaults/<hash>/`
+- [x] Update all callers in `biem-cli`, `biem-daemon`
+- [x] Update config TOML format: `[vaults.*]` → `[sources.*]`
+- [x] Add migration note for existing configs
+- [x] `cargo test` passes, `cargo check` zero warnings
 
 **Commit**: `refactor(core): rename VaultEntry to SourceEntry, vaults to sources`
 
 ### Step 0b — Rename `NoteType` → `DocType`, add code variants
-- [ ] Rename `NoteType` → `DocType` in `biem-core/src/types.rs`
-- [ ] Add variants: `SourceFile`, `TestFile`, `ConfigFile`
-- [ ] Update `ParseResult.auto_type` type
-- [ ] Update all match arms and references across crates
+- [x] Rename `NoteType` → `DocType` in `biem-core/src/types.rs`
+- [x] Add variants: `SourceFile`, `TestFile`, `ConfigFile`
+- [x] Update `ParseResult.auto_type` type
+- [x] Update all match arms and references across crates
 - [ ] Update `003-contracts.md`
-- [ ] `cargo test` passes
+- [x] `cargo test` passes
 
 **Commit**: `refactor(core): rename NoteType to DocType, add code variants`
 
 ### Step 0c — Add `Code` variant to `BitmapCategory`
-- [ ] Already present in `types.rs` ✅ (from WS1 prep)
-- [ ] Verify it's used correctly in bitmap catalog operations
+- [x] Already present in `types.rs` ✅ (from WS1 prep)
+- [x] Verify it's used correctly in bitmap catalog operations
 
-**Commit**: (skip if already done)
+**Commit**: (skip — already done)
 
 ---
 
 ## Steps
 
 ### Step 1 — Create `biem-code` crate with `CodeParser` skeleton
-- [ ] Create `crates/biem-code/` with `Cargo.toml`
-- [ ] Add to workspace `Cargo.toml`
-- [ ] Add `tree-sitter` and `tree-sitter-rust` dependencies
-- [ ] Implement `CodeParser` struct with language registry (`HashMap<String, Language>`)
-- [ ] Implement `Parser` trait: `can_parse` checks extension against registered languages
-- [ ] Implement `parse` skeleton: returns empty `ParseResult` for now
-- [ ] Unit test: `can_parse` returns true for `.rs`, false for `.md`
+- [x] Create `crates/biem-code/` with `Cargo.toml`
+- [x] Add to workspace `Cargo.toml`
+- [x] Add `tree-sitter` and `tree-sitter-rust` dependencies
+- [x] Implement `CodeParser` struct with language registry (`HashMap<String, Language>`)
+- [x] Implement `Parser` trait: `can_parse` checks extension against registered languages
+- [x] Implement `parse` skeleton: returns empty `ParseResult` for now
+- [x] Unit test: `can_parse` returns true for `.rs`, false for `.md`
 
 **Commit**: `feat(code): create biem-code crate with CodeParser skeleton`
 
 ### Step 2 — Rust grammar: AST walking and chunk extraction
-- [ ] Parse Rust source with `tree-sitter-rust`
-- [ ] Walk AST to extract: `fn`, `impl`, `struct`, `enum`, `trait`, `mod`, `use`, `const`/`static`
-- [ ] Map AST nodes to `ChunkKind` variants
-- [ ] Extract labels: function names, struct names, impl target names
-- [ ] Extract depth from scope nesting
-- [ ] Extract metadata: `signature` (fn params + return type), `visibility` (pub/pub(crate)/private)
-- [ ] Unit test: parse a Rust file → correct chunks with correct kinds, labels, signatures
-- [ ] Unit test: nested functions/methods get correct depth
-- [ ] Unit test: impl blocks produce `Method` chunks for their functions
+- [x] Parse Rust source with `tree-sitter-rust`
+- [x] Walk AST to extract: `fn`, `impl`, `struct`, `enum`, `trait`, `mod`, `use`, `const`/`static`
+- [x] Map AST nodes to `ChunkKind` variants
+- [x] Extract labels: function names, struct names, impl target names
+- [x] Extract depth from scope nesting
+- [x] Extract metadata: `signature` (fn params + return type), `visibility` (pub/pub(crate)/private)
+- [x] Unit test: parse a Rust file → correct chunks with correct kinds, labels, signatures
+- [x] Unit test: nested functions/methods get correct depth
+- [x] Unit test: impl blocks produce `Method` chunks for their functions
 
 **Commit**: `feat(code): implement Rust AST chunk extraction`
 
 ### Step 3 — Code-specific bitmap key generation
-- [ ] Generate `lang:rust` from file extension
-- [ ] Generate `kind:function`, `kind:method`, `kind:class`, etc. from `ChunkKind`
-- [ ] Generate `visibility:public`, `visibility:private` from `ChunkMetadata`
-- [ ] Generate `async:true` for async functions (needs AST check)
-- [ ] Generate `import:<crate>` from `use` statements
-- [ ] Generate `repo:<name>` from source registration config
-- [ ] Wire key generation into ingestion pipeline (code path)
-- [ ] Integration test: index a Rust file → verify bitmap keys exist in store
+- [x] Generate `lang:rust` from file extension
+- [x] Generate `kind:function`, `kind:method`, `kind:class`, etc. from `ChunkKind`
+- [x] Generate `visibility:public`, `visibility:private` from `ChunkMetadata`
+- [x] Generate `async:true` for async functions (needs AST check)
+- [x] Generate `import:<crate>` from `use` statements
+- [x] Generate `repo:<name>` from source registration config
+- [x] Wire key generation into ingestion pipeline (code path)
+- [x] Integration test: index a Rust file → verify bitmap keys exist in store
 
 **Commit**: `feat(code): generate code-specific bitmap keys`
 
 ### Step 4 — `.biemignore` support
-- [ ] Parse `.biemignore` file (`.gitignore` syntax)
-- [ ] Check during directory walk in `bulk_index` — skip matched paths
-- [ ] Check during incremental indexing — skip matched events
-- [ ] Default ignore patterns: `target/`, `node_modules/`, `.git/`, `__pycache__/`
-- [ ] Unit test: ignore patterns correctly filter paths
-- [ ] Integration test: file in ignored dir is not indexed
+- [x] Parse `.biemignore` file (`.gitignore` syntax)
+- [x] Check during directory walk in `bulk_index` — skip matched paths
+- [x] Check during incremental indexing — skip matched events
+- [x] Default ignore patterns: `target/`, `node_modules/`, `.git/`, `__pycache__/`
+- [x] Unit test: ignore patterns correctly filter paths
+- [x] Integration test: file in ignored dir is not indexed
 
 **Commit**: `feat(ingest): add .biemignore support`
 
