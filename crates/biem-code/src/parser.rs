@@ -29,6 +29,7 @@ impl CodeParser {
         // Also register .js/.jsx using the TSX grammar (superset)
         languages.insert("js".into(), ts_lang.clone());
         languages.insert("jsx".into(), ts_lang);
+        languages.insert("py".into(), tree_sitter_python::LANGUAGE.into());
         Self { languages }
     }
 
@@ -132,6 +133,7 @@ impl Parser for CodeParser {
         match lang_name {
             "rust" => walk_rust_nodes(root, source, lang_name, 0, &mut chunks, &mut tags, &mut imports),
             "typescript" | "javascript" => walk_typescript_nodes(root, source, lang_name, 0, &mut chunks, &mut tags, &mut imports),
+            "python" => walk_python_nodes(root, source, lang_name, 0, &mut chunks, &mut tags, &mut imports),
             _ => {}
         }
 
@@ -764,6 +766,265 @@ fn ts_is_async(node: &tree_sitter::Node) -> bool {
     false
 }
 
+/// ── Python AST walking ───────────────────────────────────────────
+
+/// Walk Python AST nodes and extract chunks, tags, and imports.
+fn walk_python_nodes(
+    node: tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+    chunks: &mut Vec<Chunk>,
+    tags: &mut Vec<String>,
+    imports: &mut Vec<LinkRef>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_definition" => {
+                extract_py_function(&child, source, lang, depth, chunks, tags);
+            }
+            "class_definition" => {
+                extract_py_class(&child, source, lang, depth, chunks, tags);
+            }
+            "import_statement" => {
+                extract_py_import(&child, source, imports);
+            }
+            "import_from_statement" => {
+                extract_py_import_from(&child, source, imports);
+            }
+            "expression_statement" => {
+                // Module-level assignments (constants by convention: ALL_CAPS)
+                if depth == 0 {
+                    extract_py_module_constant(&child, source, lang, chunks);
+                }
+            }
+            "decorated_definition" => {
+                // Decorators wrap function/class definitions
+                extract_py_decorated(&child, source, lang, depth, chunks, tags, imports);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Extract a Python function definition.
+fn extract_py_function(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+    chunks: &mut Vec<Chunk>,
+    tags: &mut Vec<String>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => n.utf8_text(source.as_bytes()).unwrap_or("").to_string(),
+        None => return,
+    };
+
+    let vis = py_visibility(&name);
+    let is_async = {
+        let mut c = node.walk();
+        let result = node.children(&mut c).any(|ch| ch.kind() == "async");
+        result
+    };
+
+    let sig = extract_function_signature(node, source);
+    let kind = if depth > 0 { ChunkKind::Method } else { ChunkKind::Function };
+
+    if is_async {
+        add_tag_once(tags, "async:true");
+    }
+
+    let tag = if depth > 0 { "kind:method" } else { "kind:function" };
+    add_tag_once(tags, tag);
+
+    chunks.push(Chunk {
+        byte_range: node.byte_range(),
+        kind,
+        label: Some(name),
+        depth,
+        metadata: ChunkMetadata {
+            signature: Some(sig),
+            language: Some(lang.to_string()),
+            visibility: Some(vis),
+        },
+    });
+}
+
+/// Extract a Python class definition.
+fn extract_py_class(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+    chunks: &mut Vec<Chunk>,
+    tags: &mut Vec<String>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => n.utf8_text(source.as_bytes()).unwrap_or("").to_string(),
+        None => return,
+    };
+
+    let vis = py_visibility(&name);
+    add_tag_once(tags, "kind:class");
+
+    chunks.push(Chunk {
+        byte_range: node.byte_range(),
+        kind: ChunkKind::Class,
+        label: Some(name),
+        depth,
+        metadata: ChunkMetadata {
+            signature: None,
+            language: Some(lang.to_string()),
+            visibility: Some(vis),
+        },
+    });
+
+    // Walk class body for methods
+    if let Some(body) = node.child_by_field_name("body") {
+        let mut cursor = body.walk();
+        for child in body.children(&mut cursor) {
+            match child.kind() {
+                "function_definition" => {
+                    extract_py_function(&child, source, lang, depth + 1, chunks, tags);
+                }
+                "decorated_definition" => {
+                    extract_py_decorated(&child, source, lang, depth + 1, chunks, tags, &mut Vec::new());
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Extract `import foo` statements.
+fn extract_py_import(node: &tree_sitter::Node, source: &str, imports: &mut Vec<LinkRef>) {
+    let text = node.utf8_text(source.as_bytes()).unwrap_or("");
+    // `import foo` or `import foo.bar` → target = "foo"
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "dotted_name" {
+            let module = child.utf8_text(source.as_bytes()).unwrap_or("");
+            let top = module.split('.').next().unwrap_or(module);
+            if !top.is_empty() {
+                imports.push(LinkRef {
+                    target: top.to_string(),
+                    display: Some(text.trim().to_string()),
+                    byte_offset: node.start_byte(),
+                });
+            }
+            return;
+        }
+    }
+}
+
+/// Extract `from foo import bar` statements.
+fn extract_py_import_from(node: &tree_sitter::Node, source: &str, imports: &mut Vec<LinkRef>) {
+    let text = node.utf8_text(source.as_bytes()).unwrap_or("");
+    // Find the module name
+    if let Some(module_node) = node.child_by_field_name("module_name") {
+        let module = module_node.utf8_text(source.as_bytes()).unwrap_or("");
+        let top = module.split('.').next().unwrap_or(module);
+        // Skip relative imports (starting with .)
+        if !top.is_empty() && !top.starts_with('.') {
+            imports.push(LinkRef {
+                target: top.to_string(),
+                display: Some(text.trim().to_string()),
+                byte_offset: node.start_byte(),
+            });
+        }
+    }
+}
+
+/// Extract module-level constants (ALL_CAPS assignments).
+fn extract_py_module_constant(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    chunks: &mut Vec<Chunk>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "assignment" {
+            if let Some(left) = child.child_by_field_name("left") {
+                let name = left.utf8_text(source.as_bytes()).unwrap_or("");
+                // Convention: ALL_CAPS = constant
+                if !name.is_empty() && name.chars().all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit()) {
+                    chunks.push(Chunk {
+                        byte_range: node.byte_range(),
+                        kind: ChunkKind::Constant,
+                        label: Some(name.to_string()),
+                        depth: 0,
+                        metadata: ChunkMetadata {
+                            signature: None,
+                            language: Some(lang.to_string()),
+                            visibility: Some(py_visibility(name)),
+                        },
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Handle decorated definitions (decorators wrapping functions/classes).
+fn extract_py_decorated(
+    node: &tree_sitter::Node,
+    source: &str,
+    lang: &str,
+    depth: u8,
+    chunks: &mut Vec<Chunk>,
+    tags: &mut Vec<String>,
+    _imports: &mut Vec<LinkRef>,
+) {
+    let mut decorators = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "decorator" {
+            let dec_text = child.utf8_text(source.as_bytes()).unwrap_or("");
+            let dec_name = dec_text.trim().trim_start_matches('@');
+            decorators.push(dec_name.to_string());
+        }
+    }
+
+    let mut cursor2 = node.walk();
+    for child in node.children(&mut cursor2) {
+        match child.kind() {
+            "function_definition" => {
+                extract_py_function(&child, source, lang, depth, chunks, tags);
+                // Add decorator convention tags
+                for dec in &decorators {
+                    if dec.starts_with("pytest.fixture") {
+                        add_tag_once(tags, "convention:fixture");
+                    } else if dec.starts_with("app.route") || dec.starts_with("router.") {
+                        add_tag_once(tags, "convention:route");
+                    } else if dec == "staticmethod" {
+                        add_tag_once(tags, "convention:staticmethod");
+                    } else if dec == "classmethod" {
+                        add_tag_once(tags, "convention:classmethod");
+                    } else if dec == "property" {
+                        add_tag_once(tags, "convention:property");
+                    }
+                }
+            }
+            "class_definition" => {
+                extract_py_class(&child, source, lang, depth, chunks, tags);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Python visibility heuristic: names starting with _ are private.
+fn py_visibility(name: &str) -> Visibility {
+    if name.starts_with('_') {
+        Visibility::Private
+    } else {
+        Visibility::Public
+    }
+}
+
 /// Helper: add a tag only if not already present.
 fn add_tag_once(tags: &mut Vec<String>, tag: &str) {
     if !tags.iter().any(|t| t == tag) {
@@ -1109,5 +1370,145 @@ export function Greeting({ name }: Props) {
         let e = result.chunks.iter().find(|c| c.label.as_deref() == Some("Direction")).unwrap();
         assert_eq!(e.kind, ChunkKind::Class);
         assert_eq!(e.metadata.visibility, Some(Visibility::Public));
+    }
+
+    // ── Python tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_can_parse_python_files() {
+        let parser = CodeParser::new();
+        assert!(parser.can_parse(Path::new("main.py")));
+        assert!(parser.can_parse(Path::new("src/utils.py")));
+    }
+
+    #[test]
+    fn test_parse_py_function() {
+        let parser = CodeParser::new();
+        let content = b"def greet(name: str) -> str:
+    return f'Hello, {name}!'
+
+def _internal():
+    pass
+";
+        let result = parser.parse(Path::new("utils.py"), content).unwrap();
+
+        assert!(result.tags.contains(&"lang:python".to_string()));
+        assert!(result.tags.contains(&"kind:function".to_string()));
+
+        let fns: Vec<_> = result.chunks.iter().filter(|c| c.kind == ChunkKind::Function).collect();
+        assert_eq!(fns.len(), 2);
+
+        let greet = fns.iter().find(|c| c.label.as_deref() == Some("greet")).unwrap();
+        assert_eq!(greet.metadata.visibility, Some(Visibility::Public));
+
+        let internal = fns.iter().find(|c| c.label.as_deref() == Some("_internal")).unwrap();
+        assert_eq!(internal.metadata.visibility, Some(Visibility::Private));
+    }
+
+    #[test]
+    fn test_parse_py_class_with_methods() {
+        let parser = CodeParser::new();
+        let content = b"class UserService:
+    def __init__(self, db):
+        self.db = db
+
+    def get_user(self, user_id: str):
+        return self.db.find(user_id)
+
+    def _validate(self, data):
+        pass
+";
+        let result = parser.parse(Path::new("service.py"), content).unwrap();
+
+        assert!(result.tags.contains(&"kind:class".to_string()));
+        assert!(result.tags.contains(&"kind:method".to_string()));
+
+        let class = result.chunks.iter().find(|c| c.kind == ChunkKind::Class).unwrap();
+        assert_eq!(class.label.as_deref(), Some("UserService"));
+        assert_eq!(class.depth, 0);
+
+        let methods: Vec<_> = result.chunks.iter().filter(|c| c.kind == ChunkKind::Method).collect();
+        assert_eq!(methods.len(), 3);
+
+        let validate = methods.iter().find(|c| c.label.as_deref() == Some("_validate")).unwrap();
+        assert_eq!(validate.metadata.visibility, Some(Visibility::Private));
+        assert_eq!(validate.depth, 1);
+    }
+
+    #[test]
+    fn test_parse_py_imports() {
+        let parser = CodeParser::new();
+        let content = b"import os
+import sys
+from collections import OrderedDict
+from .local import helper
+from flask import Flask
+
+def main():
+    pass
+";
+        let result = parser.parse(Path::new("app.py"), content).unwrap();
+
+        let targets: Vec<_> = result.links.iter().map(|l| l.target.as_str()).collect();
+        assert!(targets.contains(&"os"), "should have os import");
+        assert!(targets.contains(&"sys"), "should have sys import");
+        assert!(targets.contains(&"collections"), "should have collections import");
+        assert!(targets.contains(&"flask"), "should have flask import");
+        // Relative imports should be skipped
+        assert!(!targets.iter().any(|t| t.starts_with(".")), "should skip relative imports");
+    }
+
+    #[test]
+    fn test_parse_py_constants() {
+        let parser = CodeParser::new();
+        let content = b"MAX_SIZE = 1024
+DEFAULT_NAME = 'test'
+_PRIVATE_CONST = True
+
+def func():
+    pass
+";
+        let result = parser.parse(Path::new("config.py"), content).unwrap();
+
+        let consts: Vec<_> = result.chunks.iter().filter(|c| c.kind == ChunkKind::Constant).collect();
+        assert!(consts.len() >= 2, "expected at least 2 constants, got {}", consts.len());
+
+        let private = consts.iter().find(|c| c.label.as_deref() == Some("_PRIVATE_CONST"));
+        if let Some(p) = private {
+            assert_eq!(p.metadata.visibility, Some(Visibility::Private));
+        }
+    }
+
+    #[test]
+    fn test_parse_py_decorated_functions() {
+        let parser = CodeParser::new();
+        let content = b"import pytest
+
+@pytest.fixture
+def db_connection():
+    return connect()
+
+@app.route('/users')
+def list_users():
+    return []
+";
+        let result = parser.parse(Path::new("test_app.py"), content).unwrap();
+
+        let fns: Vec<_> = result.chunks.iter().filter(|c| c.kind == ChunkKind::Function).collect();
+        assert!(fns.len() >= 2, "expected at least 2 functions, got {}", fns.len());
+
+        // Convention tags from decorators
+        assert!(result.tags.contains(&"convention:fixture".to_string()));
+        assert!(result.tags.contains(&"convention:route".to_string()));
+    }
+
+    #[test]
+    fn test_parse_py_test_file_detection() {
+        let parser = CodeParser::new();
+        let content = b"def test_something():
+    assert True
+";
+        let result = parser.parse(Path::new("tests/test_utils.py"), content).unwrap();
+        assert_eq!(result.auto_type, Some(DocType::TestFile));
     }
 }

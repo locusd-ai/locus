@@ -107,13 +107,13 @@
 **Commit**: `feat(code): add TypeScript grammar support`
 
 ### Step 7 — Python grammar
-- [ ] Add `tree-sitter-python` dependency
-- [ ] Register `.py` extension
-- [ ] Extract: `def`, `class`, `import`/`from...import`, module-level constants
-- [ ] Map decorators: `@pytest.fixture` → convention tag, `@app.route` → convention tag
-- [ ] Visibility heuristic: `_private` prefix → `visibility:private`
-- [ ] Unit test: parse a Python file → correct chunks
-- [ ] Unit test: decorated functions get correct metadata
+- [x] Add `tree-sitter-python` dependency
+- [x] Register `.py` extension
+- [x] Extract: `def`, `class`, `import`/`from...import`, module-level constants
+- [x] Map decorators: `@pytest.fixture` → convention tag, `@app.route` → convention tag
+- [x] Visibility heuristic: `_private` prefix → `visibility:private`
+- [x] Unit test: parse a Python file → correct chunks
+- [x] Unit test: decorated functions get correct metadata
 
 **Commit**: `feat(code): add Python grammar support`
 
