@@ -567,7 +567,7 @@ fn cmd_semantic(query: &str, filter_keys: &[String], top_k: usize, cli: &Cli) ->
         .map_err(|e| anyhow::anyhow!("failed to open vector store: {e}"))?;
 
     let result = engine
-        .semantic_query(&request, &embedder, &vector_store)
+        .semantic_query(&request, &embedder, &vector_store, None)
         .context("semantic query failed")?;
 
     if cli.json {

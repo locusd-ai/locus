@@ -129,7 +129,7 @@ fn test_end_to_end_semantic_query() {
                 rerank: false,
             },
             &embedder,
-            &vector_store,
+            &vector_store, None,
         )
         .unwrap();
 
@@ -150,7 +150,7 @@ fn test_end_to_end_semantic_query() {
                 rerank: false,
             },
             &embedder,
-            &vector_store,
+            &vector_store, None,
         )
         .unwrap();
 
@@ -168,7 +168,7 @@ fn test_end_to_end_semantic_query() {
                 rerank: false,
             },
             &embedder,
-            &vector_store,
+            &vector_store, None,
         )
         .unwrap();
 

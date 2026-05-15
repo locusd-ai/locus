@@ -12,7 +12,7 @@ use biem_core::query::{
 use biem_core::registry::{BitmapCatalogEntry, Registry};
 use biem_core::semantic::{
     ScoreSource, ScoredPointer, SemanticQueryRequest, SemanticQueryResult,
-    Embedder, VectorStore,
+    Embedder, Reranker, VectorStore,
 };
 use biem_core::types::BitmapCategory;
 
@@ -155,15 +155,40 @@ impl BitmapQueryEngine {
         }
     }
 
-    /// Perform a semantic query: bitmap pre-filter → vector search within matching chunks.
+    /// Resolve the text content of a chunk by reading its byte range from the source file.
+    /// Returns `None` if the chunk or document can't be found, or the file can't be read.
+    fn resolve_chunk_text(&self, chunk_id: u32, matching_docs: &RoaringBitmap) -> Option<String> {
+        for doc_id in matching_docs.iter() {
+            if let Ok(chunks) = self.registry.get_chunks(doc_id) {
+                if let Some(chunk) = chunks.iter().find(|c| c.chunk_id == chunk_id) {
+                    if let Some(doc) = self.registry.lookup_by_id(doc_id).ok().flatten() {
+                        if let Ok(content) = std::fs::read_to_string(&doc.file_path) {
+                            let start = chunk.byte_start as usize;
+                            let end = chunk.byte_end as usize;
+                            if end <= content.len() {
+                                return Some(content[start..end].to_string());
+                            }
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
+    /// Perform a semantic query: bitmap pre-filter → vector search → optional rerank.
     ///
     /// The bitmap filter is mandatory — there is no full-space vector search.
-    #[instrument(skip(self, embedder, vector_store))]
+    /// If `request.rerank` is true and a reranker is provided, the top-k vector results
+    /// are re-scored using the cross-encoder for higher-quality ranking.
+    #[instrument(skip(self, embedder, vector_store, reranker))]
     pub fn semantic_query(
         &self,
         request: &SemanticQueryRequest,
         embedder: &dyn Embedder,
         vector_store: &dyn VectorStore,
+        reranker: Option<&dyn Reranker>,
     ) -> Result<SemanticQueryResult, QueryError> {
         // Phase 1: bitmap pre-filter
         let bitmap_start = Instant::now();
@@ -210,14 +235,45 @@ impl BitmapQueryEngine {
             .map_err(|e| QueryError::Semantic(e.to_string()))?;
         let elapsed_vector_us = vector_start.elapsed().as_micros() as u64;
 
-        // Phase 4: hydrate results
+        // Phase 4: optional reranking
+        let rerank_start = Instant::now();
+        let (final_scored, score_source) = if request.rerank {
+            if let Some(reranker) = reranker {
+                // Build (chunk_id, text) pairs for reranking by reading chunk
+                // content from source files using registry metadata.
+                let mut rerank_candidates: Vec<(u32, String)> = Vec::new();
+                for &(chunk_id, _) in &scored_chunks {
+                    if let Some(text) = self.resolve_chunk_text(chunk_id, &matching) {
+                        rerank_candidates.push((chunk_id, text));
+                    }
+                }
+
+                if rerank_candidates.is_empty() {
+                    (scored_chunks, ScoreSource::CosineSimilarity)
+                } else {
+                    let refs: Vec<(u32, &str)> = rerank_candidates
+                        .iter()
+                        .map(|(id, text)| (*id, text.as_str()))
+                        .collect();
+                    let reranked = reranker
+                        .rerank(&request.query_text, &refs)
+                        .map_err(|e| QueryError::Semantic(e.to_string()))?;
+                    (reranked, ScoreSource::Reranker("fastembed".into()))
+                }
+            } else {
+                (scored_chunks, ScoreSource::CosineSimilarity)
+            }
+        } else {
+            (scored_chunks, ScoreSource::CosineSimilarity)
+        };
+        let elapsed_rerank_us = rerank_start.elapsed().as_micros() as u64;
+
+        // Phase 5: hydrate results
         let leaf_keys = Self::collect_leaf_keys(&request.filter);
         let mut pointers = Vec::new();
 
-        for (chunk_id, score) in scored_chunks {
+        for (chunk_id, score) in final_scored {
             // Find the doc that owns this chunk
-            // We need to look up chunk → doc_id via registry
-            // For now, iterate matching docs to find the owner
             let mut owner_doc_id = None;
             for doc_id in matching.iter() {
                 if let Ok(chunks) = self.registry.get_chunks(doc_id) {
@@ -234,7 +290,7 @@ impl BitmapQueryEngine {
                         pointer: ptr,
                         chunk_id,
                         score,
-                        score_source: ScoreSource::CosineSimilarity,
+                        score_source: score_source.clone(),
                     });
                 }
             }
@@ -246,7 +302,7 @@ impl BitmapQueryEngine {
             vector_searched,
             elapsed_bitmap_us,
             elapsed_vector_us,
-            elapsed_rerank_us: 0,
+            elapsed_rerank_us,
         })
     }
 }
