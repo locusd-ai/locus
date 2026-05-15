@@ -1,7 +1,7 @@
 # BIEM System Architecture — Overview
 
-> Status: **Phase 1 — Obsidian core implemented**
-> Scope: Obsidian vault use case first, designed for extensibility to code/confluence/other sources
+> Status: **Phase 2 — Code intelligence implemented (Rust, TypeScript, Python)**
+> Scope: Obsidian vault + codebase indexing, designed for extensibility to confluence/other sources
 > See also: `002-roadmap.md` for phased build plan
 
 ## Decisions from Iteration 1
@@ -26,7 +26,7 @@ BIEM is a **local indexing and filtering service**. It does not retrieve content
 graph LR
     subgraph Sources["Data Sources"]
         OV[("Obsidian Vault")]
-        CS[("Codebase<br/>(future)")]
+        CS[("Codebase<br/>(Rust, TS, Python)")]
         OTHER[("Confluence, etc.<br/>(future)")]
     end
 
@@ -68,7 +68,7 @@ graph TB
 
         subgraph Parsing["Parser Layer (pluggable)"]
             P_MD["Markdown Parser<br/>(Obsidian)"]
-            P_CODE["Code Parser<br/>(Tree-Sitter, future)"]
+            P_CODE["Code Parser<br/>(Tree-Sitter)<br/>Rust │ TypeScript │ Python"]
             P_OTHER["Other Parsers<br/>(future)"]
         end
 

@@ -103,7 +103,7 @@ pub enum ChunkKind {
     Frontmatter,    // YAML frontmatter block
     Body,           // Entire document body (no headings)
 
-    // Code chunks (future)
+    // Code chunks
     Function,
     Method,
     Class,
@@ -140,8 +140,8 @@ pub struct ParseResult {
     pub tags: Vec<String>,
     /// Links to other documents
     pub links: Vec<LinkRef>,
-    /// Auto-detected note type, if confident enough
-    pub auto_type: Option<NoteType>,
+    /// Auto-detected document type, if confident enough
+    pub auto_type: Option<DocType>,
     /// Parsed YAML frontmatter as key-value pairs
     pub frontmatter: HashMap<String, serde_json::Value>,
 }
@@ -174,16 +174,46 @@ pub enum ParseError {
 sequenceDiagram
     participant I as Ingestion
     participant PR as Parser Registry
-    participant P as MarkdownParser
+    participant PM as MarkdownParser
+    participant PC as CodeParser
 
     I->>PR: find_parser(path)
     PR->>PR: iterate parsers, call can_parse()
-    PR-->>I: Some(&MarkdownParser)
-    I->>P: parse(path, content)
-    P-->>I: ParseResult
+    alt Markdown file (.md)
+        PR-->>I: Some(&MarkdownParser)
+        I->>PM: parse(path, content)
+        PM-->>I: ParseResult
+    else Code file (.rs, .ts, .py)
+        PR-->>I: Some(&CodeParser)
+        I->>PC: parse(path, content)
+        PC-->>I: ParseResult (with lang/kind/visibility tags)
+    end
 ```
 
 The ingestion pipeline holds a `Vec<Box<dyn Parser>>` (the "parser registry") and selects the first parser that returns `true` for `can_parse`.
+
+### Code Parser (biem-code)
+
+The `CodeParser` uses Tree-sitter grammars for AST-aware chunking. Currently supports:
+
+| Language | Extensions | Grammar |
+|----------|-----------|---------|
+| Rust | `.rs` | `tree-sitter-rust` |
+| TypeScript | `.ts`, `.tsx` | `tree-sitter-typescript` |
+| JavaScript | `.js`, `.jsx` | `tree-sitter-typescript` (TSX grammar) |
+| Python | `.py` | `tree-sitter-python` |
+
+**Code-specific bitmap keys** generated during ingestion:
+
+| Key pattern | Example | Source |
+|-------------|---------|--------|
+| `lang:<language>` | `lang:rust`, `lang:typescript` | File extension |
+| `kind:<kind>` | `kind:function`, `kind:method`, `kind:class` | AST node type |
+| `visibility:<vis>` | `visibility:public`, `visibility:private` | Visibility modifier / export |
+| `async:true` | `async:true` | Async function detection |
+| `import:<module>` | `import:serde`, `import:react` | Use/import statements |
+| `type:<doc_type>` | `type:source_file`, `type:test_file` | Path convention detection |
+| `convention:<tag>` | `convention:fixture`, `convention:route` | Python decorators |
 
 ---
 

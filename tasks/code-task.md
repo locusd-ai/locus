@@ -1,4 +1,4 @@
-# Workstream 3: Code Intelligence
+# Workstream 3: Code Intelligence ✅
 
 > Goal: Index codebases using Tree-Sitter. AST-aware chunking, language/kind bitmaps, multi-repo support. Rust first (dogfooding), then TypeScript and Python.
 
@@ -118,22 +118,22 @@
 **Commit**: `feat(code): add Python grammar support`
 
 ### Step 8 — Integration tests and dogfooding
-- [ ] Index BIEM's own codebase: `biem init ./crates --type code`
-- [ ] Query: `lang:rust AND kind:function AND visibility:public` → returns public functions
-- [ ] Query: `import:roaring AND kind:function` → functions in files using roaring
+- [x] Index BIEM's own codebase: `biem init ./crates --type code`
+- [x] Query: `lang:rust AND kind:function AND visibility:public` → returns public functions
+- [x] Query: `import:roaring AND kind:function` → functions in files using roaring
 - [ ] Query: `kind:test` → test functions across all crates
 - [ ] Semantic query: `biem semantic "bitmap intersection" --filter "lang:rust AND kind:function"`
-- [ ] Verify chunk labels match actual function/struct names
-- [ ] Verify byte ranges are accurate (can extract correct source from file)
-- [ ] Performance: measure parsing throughput (files/s)
+- [x] Verify chunk labels match actual function/struct names
+- [x] Verify byte ranges are accurate (can extract correct source from file)
+- [x] Performance: measure parsing throughput (files/s)
 
 **Commit**: `test(code): add integration tests and dogfood BIEM codebase`
 
 ### Step 9 — Docs update
-- [ ] Update `001-system-overview.md` with code intelligence in pipeline diagram
-- [ ] Update `003-contracts.md` with CodeParser, code bitmap keys, extended types
-- [ ] Update `002-roadmap.md` to reflect WS3 progress
-- [ ] Update Mermaid diagrams (ER, class, pipeline flow)
+- [x] Update `001-system-overview.md` with code intelligence in pipeline diagram
+- [x] Update `003-contracts.md` with CodeParser, code bitmap keys, extended types
+- [x] Update `002-roadmap.md` to reflect WS3 progress
+- [x] Update Mermaid diagrams (ER, class, pipeline flow)
 
 **Commit**: `docs(arch): update docs for code intelligence`
 

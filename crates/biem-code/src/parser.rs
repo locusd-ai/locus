@@ -169,7 +169,7 @@ fn walk_rust_nodes(
                         tags.push("kind:function".to_string());
                     }
                     // Check for async
-                    if is_async_function(&child) && !tags.contains(&"async:true".to_string()) {
+                    if is_async_function(&child, source) && !tags.contains(&"async:true".to_string()) {
                         tags.push("async:true".to_string());
                     }
                     chunks.push(chunk);
@@ -371,14 +371,17 @@ fn extract_visibility(node: &tree_sitter::Node, source: &[u8]) -> Visibility {
 }
 
 /// Check if a function is async.
-fn is_async_function(node: &tree_sitter::Node) -> bool {
+fn is_async_function(node: &tree_sitter::Node, source: &str) -> bool {
+    // Check for "async" keyword child
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "async" {
             return true;
         }
     }
-    false
+    // Fallback: check source text for async keyword
+    let text = &source[node.start_byte()..node.end_byte().min(node.start_byte() + 50)];
+    text.contains("async fn") || text.starts_with("async ")
 }
 
 /// Extract function signature (everything before the body block).

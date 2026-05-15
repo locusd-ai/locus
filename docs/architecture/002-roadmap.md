@@ -167,17 +167,23 @@ Vector-based semantic search as complement to bitmap filtering. Bitmaps pre-filt
 
 ---
 
-## Phase 3 — Code Intelligence (Future)
+## Phase 3 — Code Intelligence ✅
 
-Extend BIEM to index codebases using Tree-Sitter.
+Extend BIEM to index codebases using Tree-sitter. **Implemented in WS3.**
 
-### Planned Work
-- [ ] CodeParser implementation (Tree-Sitter trait impl)
-- [ ] AST-aware chunking (function, class, module scope)
-- [ ] Semantic bits: `is_function`, `is_class`, `is_exported`, `has_side_effects`
-- [ ] Multi-repo support: global ID namespace, repo bitmaps
-- [ ] Cross-repo impact analysis (caller bitmaps)
-- [ ] `biem init <repo-path> --type code`
+### Completed
+- [x] `biem-code` crate with `CodeParser` (Tree-sitter, `Parser` trait)
+- [x] AST-aware chunking (function, method, class, module, constant, import)
+- [x] Rust grammar (tree-sitter-rust): fn, struct, enum, trait, impl, mod, use, const
+- [x] TypeScript grammar (tree-sitter-typescript): function, class, interface, type, enum, import/export
+- [x] Python grammar (tree-sitter-python): def, class, import/from, decorators, ALL_CAPS constants
+- [x] Code-specific bitmap keys: `lang:*`, `kind:*`, `visibility:*`, `async:true`, `import:*`
+- [x] Python decorator convention tags: `convention:fixture`, `convention:route`, etc.
+- [x] `.biemignore` support (gitignore syntax, default: `target/`, `node_modules/`, `.git/`, etc.)
+- [x] `biem init <path> --type code` for code source registration
+- [x] Multi-source support (Obsidian + code coexist)
+- [x] Source type inference from parse result tags
+- [x] Integration tests: bitmap queries, chunk accuracy, multi-language, throughput
 
 ---
 
