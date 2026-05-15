@@ -164,38 +164,31 @@ fn walk_rust_nodes(
         match child.kind() {
             "function_item" => {
                 if let Some(chunk) = extract_function(&child, source, lang, depth) {
-                    // Add kind tag
-                    if !tags.contains(&"kind:function".to_string()) {
-                        tags.push("kind:function".to_string());
+                    add_tag_once(tags, "kind:function");
+                    if is_async_function(&child, source) {
+                        add_tag_once(tags, "async:true");
                     }
-                    // Check for async
-                    if is_async_function(&child, source) && !tags.contains(&"async:true".to_string()) {
-                        tags.push("async:true".to_string());
+                    if is_test_function(&child, source) {
+                        add_tag_once(tags, "kind:test");
                     }
                     chunks.push(chunk);
                 }
             }
             "struct_item" => {
                 if let Some(chunk) = extract_named_item(&child, source, lang, ChunkKind::Class, depth) {
-                    if !tags.contains(&"kind:struct".to_string()) {
-                        tags.push("kind:struct".to_string());
-                    }
+                    add_tag_once(tags, "kind:struct");
                     chunks.push(chunk);
                 }
             }
             "enum_item" => {
                 if let Some(chunk) = extract_named_item(&child, source, lang, ChunkKind::Class, depth) {
-                    if !tags.contains(&"kind:enum".to_string()) {
-                        tags.push("kind:enum".to_string());
-                    }
+                    add_tag_once(tags, "kind:enum");
                     chunks.push(chunk);
                 }
             }
             "trait_item" => {
                 if let Some(chunk) = extract_named_item(&child, source, lang, ChunkKind::Class, depth) {
-                    if !tags.contains(&"kind:trait".to_string()) {
-                        tags.push("kind:trait".to_string());
-                    }
+                    add_tag_once(tags, "kind:trait");
                     chunks.push(chunk);
                 }
             }
@@ -322,8 +315,9 @@ fn extract_impl_block(
                         },
                     });
 
-                    if !tags.contains(&"kind:method".to_string()) {
-                        tags.push("kind:method".to_string());
+                    add_tag_once(tags, "kind:method");
+                    if is_test_function(&child, source) {
+                        add_tag_once(tags, "kind:test");
                     }
                 }
             }
@@ -382,6 +376,32 @@ fn is_async_function(node: &tree_sitter::Node, source: &str) -> bool {
     // Fallback: check source text for async keyword
     let text = &source[node.start_byte()..node.end_byte().min(node.start_byte() + 50)];
     text.contains("async fn") || text.starts_with("async ")
+}
+
+/// Check if a function is a test function.
+/// Rust: preceded by `#[test]` or `#[tokio::test]` attribute.
+/// Python: name starts with `test_`.
+/// TS/JS: name is `it`, `test`, or starts with `test`.
+fn is_test_function(node: &tree_sitter::Node, source: &str) -> bool {
+    // Check for Rust #[test] attribute: look at source before the function
+    let start = node.start_byte();
+    // Look back up to 200 bytes for attributes
+    let lookback_start = start.saturating_sub(200);
+    let preceding = &source[lookback_start..start];
+    if preceding.contains("#[test]") || preceding.contains("#[tokio::test]") || preceding.contains("#[rstest]") {
+        return true;
+    }
+
+    // Check function name for test conventions
+    if let Some(name_node) = node.child_by_field_name("name") {
+        let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+        // Python: test_* prefix
+        if name.starts_with("test_") {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Extract function signature (everything before the body block).
@@ -841,6 +861,11 @@ fn extract_py_function(
 
     let tag = if depth > 0 { "kind:method" } else { "kind:function" };
     add_tag_once(tags, tag);
+
+    // Detect test functions
+    if name.starts_with("test_") || is_test_function(node, source) {
+        add_tag_once(tags, "kind:test");
+    }
 
     chunks.push(Chunk {
         byte_range: node.byte_range(),
@@ -1513,5 +1538,57 @@ def list_users():
 ";
         let result = parser.parse(Path::new("tests/test_utils.py"), content).unwrap();
         assert_eq!(result.auto_type, Some(DocType::TestFile));
+    }
+
+    // ── kind:test detection tests ────────────────────────────────
+
+    #[test]
+    fn test_rust_test_attribute_detected() {
+        let parser = CodeParser::new();
+        let content = b"#[test]
+fn test_something() {
+    assert!(true);
+}
+
+fn not_a_test() {}
+";
+        let result = parser.parse(Path::new("tests.rs"), content).unwrap();
+        assert!(result.tags.contains(&"kind:test".to_string()), "should detect #[test] functions");
+        assert!(result.tags.contains(&"kind:function".to_string()));
+    }
+
+    #[test]
+    fn test_rust_tokio_test_detected() {
+        let parser = CodeParser::new();
+        let content = b"#[tokio::test]
+async fn test_async_thing() {
+    let x = 1;
+}
+";
+        let result = parser.parse(Path::new("async_tests.rs"), content).unwrap();
+        assert!(result.tags.contains(&"kind:test".to_string()), "should detect #[tokio::test]");
+    }
+
+    #[test]
+    fn test_python_test_prefix_detected() {
+        let parser = CodeParser::new();
+        let content = b"def test_add():
+    assert 1 + 1 == 2
+
+def helper():
+    pass
+";
+        let result = parser.parse(Path::new("test_math.py"), content).unwrap();
+        assert!(result.tags.contains(&"kind:test".to_string()), "should detect test_ prefix");
+    }
+
+    #[test]
+    fn test_no_false_positive_test_detection() {
+        let parser = CodeParser::new();
+        let content = b"pub fn process() -> u32 { 42 }
+pub fn helper() -> bool { true }
+";
+        let result = parser.parse(Path::new("lib.rs"), content).unwrap();
+        assert!(!result.tags.contains(&"kind:test".to_string()), "should not detect test in normal functions");
     }
 }
