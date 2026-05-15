@@ -81,6 +81,17 @@
 
 **Commit**: `docs(arch): update docs for semantic layer`
 
+### Step 9 — Reranker integration
+- [x] Implement `FastEmbedReranker` in `biem-embed` (BGE-Reranker-Base, local ONNX cross-encoder)
+- [x] Implements `Reranker` trait from `biem-core`
+- [x] Wire reranker into `BitmapQueryEngine::semantic_query()` as optional 4th arg
+- [x] Chunk text resolved from disk via registry metadata (doc path + byte range)
+- [x] Update all callers (CLI, tests) to pass `None` or reranker instance
+- [x] Update `002-roadmap.md` and `003-contracts.md`
+- [x] All tests pass
+
+**Commit**: `feat(embed): implement FastEmbedReranker cross-encoder`
+
 ## Validation
 
 - [x] All existing tests still pass (no regressions)

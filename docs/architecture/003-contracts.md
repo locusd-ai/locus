@@ -1173,6 +1173,14 @@ pub trait Reranker: Send + Sync {
 }
 ```
 
+#### Implementations
+
+| Struct | Crate | Backend | Notes |
+|---|---|---|---|
+| `FastEmbedReranker` | `biem-embed` | fastembed ONNX cross-encoder | BGE-Reranker-Base default (~140MB model), local inference |
+
 ### Key contract
 
 **Bitmap filter is mandatory for semantic queries.** There is no "search everything" mode — vector search is always scoped to bitmap-pre-filtered candidates. This keeps vector search fast and focused.
+
+**Reranking is optional.** When `SemanticQueryRequest.rerank = true` and a `Reranker` is provided, the query engine reads chunk content from source files and re-scores via cross-encoder. Chunk text is resolved from disk using registry metadata (doc path + byte offsets).

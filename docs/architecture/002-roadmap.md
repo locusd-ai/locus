@@ -152,7 +152,7 @@ Vector-based semantic search as complement to bitmap filtering. Bitmaps pre-filt
 - [x] Vector store integration (USearch HNSW, persistent on-disk)
 - [x] Semantic scoring in QueryResult (`ScoredPointer` with cosine similarity)
 - [x] Query Engine: bitmap pre-filter → vector search within matching chunks
-- [ ] Re-ranker integration (MiniLM or BGE-Reranker)
+- [x] Re-ranker integration (BGE-Reranker-Base via fastembed cross-encoder)
 - [ ] Benchmarks: latency and recall vs pure bitmap search
 
 ### Performance & Scalability (Backlog)
