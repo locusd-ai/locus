@@ -6,7 +6,10 @@
 use std::sync::Mutex;
 
 use biem_core::semantic::{EmbedError, Embedder, EmbeddingVector};
+use biem_core::semantic::{RerankError, Reranker};
+use biem_core::types::ChunkId;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{RerankerModel, RerankInitOptions, TextRerank};
 use tracing::info;
 
 /// Local embedder using fastembed (ONNX inference, no API calls).
@@ -60,6 +63,69 @@ impl Embedder for FastEmbedEmbedder {
 
     fn dimension(&self) -> usize {
         self.dimension
+    }
+}
+
+/// Local cross-encoder reranker using fastembed (ONNX inference, no API calls).
+pub struct FastEmbedReranker {
+    model: Mutex<TextRerank>,
+    model_name: String,
+}
+
+impl FastEmbedReranker {
+    /// Create with the default reranker model (BGE-Reranker-Base).
+    pub fn new() -> Result<Self, RerankError> {
+        Self::with_model(RerankerModel::BGERerankerBase)
+    }
+
+    /// Create with a specific fastembed reranker model.
+    pub fn with_model(model: RerankerModel) -> Result<Self, RerankError> {
+        let model_name = format!("{:?}", model);
+        info!(model = %model_name, "loading reranker model");
+
+        let options = RerankInitOptions::new(model).with_show_download_progress(true);
+        let reranker = TextRerank::try_new(options)
+            .map_err(|e| RerankError::Model(e.to_string()))?;
+
+        Ok(Self {
+            model: Mutex::new(reranker),
+            model_name,
+        })
+    }
+
+    /// The model name (for ScoreSource tagging).
+    pub fn model_name(&self) -> &str {
+        &self.model_name
+    }
+}
+
+impl Reranker for FastEmbedReranker {
+    fn rerank(
+        &self,
+        query: &str,
+        candidates: &[(ChunkId, &str)],
+    ) -> Result<Vec<(ChunkId, f32)>, RerankError> {
+        if candidates.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let documents: Vec<&str> = candidates.iter().map(|(_, text)| *text).collect();
+        let mut model = self.model.lock().map_err(|e| RerankError::Model(e.to_string()))?;
+
+        let results = model
+            .rerank(query, &documents, false, None)
+            .map_err(|e| RerankError::Model(e.to_string()))?;
+
+        // Map back to (ChunkId, score) using the index from RerankResult
+        let mut scored: Vec<(ChunkId, f32)> = results
+            .into_iter()
+            .map(|r| (candidates[r.index].0, r.score))
+            .collect();
+
+        // Sort descending by score
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok(scored)
     }
 }
 

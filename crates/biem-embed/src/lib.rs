@@ -20,5 +20,8 @@ pub use memory::InMemoryVectorStore;
 #[cfg(feature = "fastembed-embedder")]
 pub use fastembed::FastEmbedEmbedder;
 
+#[cfg(feature = "fastembed-embedder")]
+pub use fastembed::FastEmbedReranker;
+
 #[cfg(feature = "usearch-store")]
 pub use self::usearch::UsearchVectorStore;
