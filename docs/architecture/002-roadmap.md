@@ -165,6 +165,34 @@ Vector-based semantic search as complement to bitmap filtering. Bitmaps pre-filt
 - [ ] Implicit linkage / ghost links (shared bit-clusters)
 - [ ] Dynamic MOC generation (graph centrality via bitmaps)
 
+### LLM Provenance & Session Tracking (Backlog)
+
+Track the lineage of LLM-generated assets and session context via bitmap keys.
+
+**Provenance bitmaps** — when an LLM generates an asset (file), a `provenance:<doc_id>` bitmap is created containing the new asset's doc_id for each source document used. This enables:
+- **Reconstruction**: query the asset → get all `provenance:*` keys it appears in → resolve source docs → feed back to LLM
+- **Impact analysis**: query `provenance:42` → "which assets were built from doc 42?" — useful when a source changes
+- **Staleness detection**: source doc hash changed since asset was generated → flag for regeneration
+
+**Session bitmaps** — `session:<session_id>` tags group documents by LLM conversation:
+- LLM-generated assets get tagged with the session that produced them
+- Documents *read* during a session also get the session tag (via MCP/API instrumentation)
+- Enables "show me everything from that conversation" and session replay/reconstruction
+- Session metadata (timestamp, model, prompt summary) stored in registry or frontmatter
+
+**Key patterns:**
+
+| Key | Category | Contains |
+|---|---|---|
+| `provenance:<source_doc_id>` | Provenance | Doc_ids of assets built from this source |
+| `session:<session_id>` | Session | Doc_ids of all assets created + docs read in this session |
+
+**Implementation notes:**
+- Pure bitmap — no new schema, just two new `BitmapCategory` variants (`Provenance`, `Session`) added at implementation time
+- Write path: MCP tool / API endpoint accepts `provenance_doc_ids` and `session_id` alongside file creation
+- Read path: query engine resolves provenance/session keys like any other bitmap filter
+- Session read-tracking: MCP `biem_inspect` / `biem_search` tools optionally tag accessed docs with active session
+
 ---
 
 ## Phase 3 — Code Intelligence ✅
