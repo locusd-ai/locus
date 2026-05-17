@@ -4,7 +4,7 @@
 
 ## Steps
 
-### Step 1 — Core types and traits in `biem-core`
+### Step 1 — Core types and traits in `locus-core`
 - [x] Add `EmbeddingVector` type alias (`Vec<f32>`)
 - [x] Add `ScoredPointer` and `ScoreSource` types
 - [x] Add `Embedder` trait: `embed(&[&str]) -> Vec<EmbeddingVector>`, `dimension() -> usize`
@@ -17,15 +17,15 @@
 
 **Commit**: `feat(core): add semantic/vector types and Embedder/VectorStore traits`
 
-### Step 2 — Create `biem-embed` crate with in-memory impls
-- [x] Create `crates/biem-embed/` with `Cargo.toml`
+### Step 2 — Create `locus-embed` crate with in-memory impls
+- [x] Create `crates/locus-embed/` with `Cargo.toml`
 - [x] Add to workspace `Cargo.toml`
 - [x] Implement `InMemoryVectorStore` (brute-force cosine similarity, for tests)
 - [x] Unit test: upsert → search round-trip
 - [x] Unit test: search_within respects candidate set
 - [x] Unit test: delete removes from results
 
-**Commit**: `feat(embed): create biem-embed crate with InMemoryVectorStore`
+**Commit**: `feat(embed): create locus-embed crate with InMemoryVectorStore`
 
 ### Step 3 — FastEmbed embedder (local model)
 - [x] Add `fastembed` crate dependency
@@ -66,7 +66,7 @@
 **Commit**: `feat(query): implement bitmap-scoped semantic search`
 
 ### Step 7 — CLI and interface commands
-- [x] `biem semantic "query text" --filter tag:X` — semantic search with bitmap pre-filter
+- [x] `locus semantic "query text" --filter tag:X` — semantic search with bitmap pre-filter
 - [x] JSON output support for semantic results
 - [x] Wire up embedder/vector store in persistent mode
 
@@ -82,8 +82,8 @@
 **Commit**: `docs(arch): update docs for semantic layer`
 
 ### Step 9 — Reranker integration
-- [x] Implement `FastEmbedReranker` in `biem-embed` (BGE-Reranker-Base, local ONNX cross-encoder)
-- [x] Implements `Reranker` trait from `biem-core`
+- [x] Implement `FastEmbedReranker` in `locus-embed` (BGE-Reranker-Base, local ONNX cross-encoder)
+- [x] Implements `Reranker` trait from `locus-core`
 - [x] Wire reranker into `BitmapQueryEngine::semantic_query()` as optional 4th arg
 - [x] Chunk text resolved from disk via registry metadata (doc path + byte range)
 - [x] Update all callers (CLI, tests) to pass `None` or reranker instance
@@ -95,7 +95,7 @@
 ## Validation
 
 - [x] All existing tests still pass (no regressions)
-- [x] `biem semantic "query" --filter tag:work` returns ranked results
+- [x] `locus semantic "query" --filter tag:work` returns ranked results
 - [x] Vector search is scoped to bitmap-filtered docs (verified by candidate count)
 - [x] Embedding generation works offline (local model, no API calls)
 - [x] Second index run skips unchanged chunk embeddings

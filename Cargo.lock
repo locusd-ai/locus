@@ -488,194 +488,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "biem-bitmap"
-version = "0.1.0"
-dependencies = [
- "biem-core",
- "heed",
- "roaring",
- "tempfile",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "biem-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "biem-bitmap",
- "biem-code",
- "biem-core",
- "biem-embed",
- "biem-enrich",
- "biem-ingest",
- "biem-parser",
- "biem-query",
- "biem-registry",
- "clap",
- "serde_json",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "biem-code"
-version = "0.1.0"
-dependencies = [
- "biem-core",
- "tempfile",
- "thiserror",
- "tracing",
- "tree-sitter",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
-]
-
-[[package]]
-name = "biem-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dirs",
- "roaring",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "biem-daemon"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "biem-bitmap",
- "biem-code",
- "biem-core",
- "biem-ingest",
- "biem-parser",
- "biem-query",
- "biem-registry",
- "biem-watcher",
- "clap",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "biem-embed"
-version = "0.1.0"
-dependencies = [
- "biem-core",
- "fastembed",
- "tempfile",
- "tracing",
- "usearch",
-]
-
-[[package]]
-name = "biem-enrich"
-version = "0.1.0"
-dependencies = [
- "biem-core",
- "blake3",
- "globset",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "tracing",
-]
-
-[[package]]
-name = "biem-ingest"
-version = "0.1.0"
-dependencies = [
- "biem-bitmap",
- "biem-code",
- "biem-core",
- "biem-enrich",
- "biem-parser",
- "biem-query",
- "biem-registry",
- "blake3",
- "criterion",
- "duckdb",
- "ignore",
- "petgraph",
- "rand 0.8.6",
- "roaring",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "biem-parser"
-version = "0.1.0"
-dependencies = [
- "biem-core",
- "serde_json",
- "serde_yaml",
- "thiserror",
-]
-
-[[package]]
-name = "biem-query"
-version = "0.1.0"
-dependencies = [
- "biem-bitmap",
- "biem-core",
- "biem-embed",
- "biem-ingest",
- "biem-parser",
- "biem-registry",
- "roaring",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "biem-registry"
-version = "0.1.0"
-dependencies = [
- "biem-core",
- "duckdb",
- "serde_json",
- "tempfile",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "biem-watcher"
-version = "0.1.0"
-dependencies = [
- "biem-core",
- "globset",
- "notify",
- "notify-debouncer-mini",
- "tempfile",
- "thiserror",
- "tracing",
-]
-
-[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2640,6 +2452,194 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
+]
+
+[[package]]
+name = "locus-bitmap"
+version = "0.1.0"
+dependencies = [
+ "heed",
+ "locus-core",
+ "roaring",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "locus-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "locus-bitmap",
+ "locus-code",
+ "locus-core",
+ "locus-embed",
+ "locus-enrich",
+ "locus-ingest",
+ "locus-parser",
+ "locus-query",
+ "locus-registry",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "locus-code"
+version = "0.1.0"
+dependencies = [
+ "locus-core",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
+name = "locus-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dirs",
+ "roaring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "locus-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "locus-bitmap",
+ "locus-code",
+ "locus-core",
+ "locus-ingest",
+ "locus-parser",
+ "locus-query",
+ "locus-registry",
+ "locus-watcher",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "locus-embed"
+version = "0.1.0"
+dependencies = [
+ "fastembed",
+ "locus-core",
+ "tempfile",
+ "tracing",
+ "usearch",
+]
+
+[[package]]
+name = "locus-enrich"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "globset",
+ "locus-core",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "locus-ingest"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "criterion",
+ "duckdb",
+ "ignore",
+ "locus-bitmap",
+ "locus-code",
+ "locus-core",
+ "locus-enrich",
+ "locus-parser",
+ "locus-query",
+ "locus-registry",
+ "petgraph",
+ "rand 0.8.6",
+ "roaring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "locus-parser"
+version = "0.1.0"
+dependencies = [
+ "locus-core",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+]
+
+[[package]]
+name = "locus-query"
+version = "0.1.0"
+dependencies = [
+ "locus-bitmap",
+ "locus-core",
+ "locus-embed",
+ "locus-ingest",
+ "locus-parser",
+ "locus-registry",
+ "roaring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "locus-registry"
+version = "0.1.0"
+dependencies = [
+ "duckdb",
+ "locus-core",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "locus-watcher"
+version = "0.1.0"
+dependencies = [
+ "globset",
+ "locus-core",
+ "notify",
+ "notify-debouncer-mini",
+ "tempfile",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

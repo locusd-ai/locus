@@ -1,4 +1,4 @@
-# BIEM Phase 2 — Enrichment, Vectors & Code Intelligence
+# Locus Phase 2 — Enrichment, Vectors & Code Intelligence
 
 > Status: **Planning**
 > Depends on: Phase 1 (complete)
@@ -22,20 +22,20 @@ By the end of Phase 2, an LLM can query: `concept:auth AND lang:rust AND kind:fu
 
 | Crate | Responsibility |
 |-------|---------------|
-| `biem-enrich` | TagPipeline trait, builtin taggers, tagger cache, custom tagger loader |
-| `biem-embed` | Embedding trait, model integration, vector store trait |
-| `biem-code` | CodeParser (Tree-sitter), AST chunking, language detection |
+| `locus-enrich` | TagPipeline trait, builtin taggers, tagger cache, custom tagger loader |
+| `locus-embed` | Embedding trait, model integration, vector store trait |
+| `locus-code` | CodeParser (Tree-sitter), AST chunking, language detection |
 
 ### Modified crates
 
 | Crate | Changes |
 |-------|---------|
-| `biem-core` | New types: `TaggerResult`, `EmbeddingVector`, `CodeChunkKind`. Extended `ChunkKind` enum |
-| `biem-ingest` | Integrate `TagPipeline` after parsing, before bitmap write. Embed chunks if embedder configured |
-| `biem-query` | New `SemanticQuery` mode: bitmap pre-filter → vector rerank → merged result |
-| `biem-cli` | New commands: `biem init --type code`, `biem taggers`, `biem enrich` |
-| `biem-daemon` | Register code watchers, serve enriched results |
-| `biem-registry` | Schema additions: `tagger_cache`, `embeddings` tables |
+| `locus-core` | New types: `TaggerResult`, `EmbeddingVector`, `CodeChunkKind`. Extended `ChunkKind` enum |
+| `locus-ingest` | Integrate `TagPipeline` after parsing, before bitmap write. Embed chunks if embedder configured |
+| `locus-query` | New `SemanticQuery` mode: bitmap pre-filter → vector rerank → merged result |
+| `locus-cli` | New commands: `locus init --type code`, `locus taggers`, `locus enrich` |
+| `locus-daemon` | Register code watchers, serve enriched results |
+| `locus-registry` | Schema additions: `tagger_cache`, `embeddings` tables |
 
 ### Pipeline flow (Phase 2)
 
@@ -43,16 +43,16 @@ By the end of Phase 2, an LLM can query: `concept:auth AND lang:rust AND kind:fu
 file bytes
   │
   ▼
-Parser (structural)          ← biem-parser (markdown) or biem-code (tree-sitter)
+Parser (structural)          ← locus-parser (markdown) or locus-code (tree-sitter)
   │
   ▼
 ParseResult { tags, links, type, chunks }
   │
   ▼
-TagPipeline (cached)         ← biem-enrich
+TagPipeline (cached)         ← locus-enrich
   ├── BuiltinTaggers         (deterministic, no I/O)
   ├── LlmTagger              (optional, API key required)
-  └── CustomTaggers           (.biem/taggers/*.yaml)
+  └── CustomTaggers           (.locus/taggers/*.yaml)
   │
   ▼
 EnrichedResult { ...ParseResult, inferred_tags }
@@ -69,7 +69,7 @@ EnrichedResult { ...ParseResult, inferred_tags }
 ### 1.1 Core trait and types
 
 ```rust
-// biem-core additions
+// locus-core additions
 
 /// Result from a single tagger run, cached per blake3 hash.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,7 +90,7 @@ pub struct EnrichmentCache {
 ```
 
 ```rust
-// biem-enrich
+// locus-enrich
 
 /// A tagger produces additional bitmap keys from a parse result.
 pub trait Tagger: Send + Sync {
@@ -155,10 +155,10 @@ Design constraints:
 - Confidence field populated (LLM self-rates confidence)
 - Rate limiting built in — configurable `max_concurrency` for API calls
 
-### 1.4 Custom taggers (`.biem/taggers/*.yaml`)
+### 1.4 Custom taggers (`.locus/taggers/*.yaml`)
 
 ```yaml
-# .biem/taggers/team-ownership.yaml
+# .locus/taggers/team-ownership.yaml
 name: team-ownership
 version: 1  # bump to invalidate cache
 rules:
@@ -176,7 +176,7 @@ rules:
 ```
 
 ```yaml
-# .biem/taggers/priority.yaml
+# .locus/taggers/priority.yaml
 name: priority-signals
 version: 1
 rules:
@@ -191,23 +191,23 @@ rules:
     add_tags: ["attention:recent-auth-change"]
 ```
 
-Custom tagger rules are loaded from both `.biem/taggers/` (project-local) and `~/.biem/taggers/` (global). Project-local takes precedence on name collision.
+Custom tagger rules are loaded from both `.locus/taggers/` (project-local) and `~/.locus/taggers/` (global). Project-local takes precedence on name collision.
 
 Cache invalidation: `version` field in the YAML. Bump it → all cached results for that tagger are invalidated on next index.
 
 ### 1.5 Task breakdown
 
-- [ ] Define `Tagger` trait and `TaggerResult` types in `biem-core`
-- [ ] Create `biem-enrich` crate with `TagPipeline` orchestrator
-- [ ] Implement `TaggerCache` backed by filesystem (`.biem/cache/taggers/`)
+- [ ] Define `Tagger` trait and `TaggerResult` types in `locus-core`
+- [ ] Create `locus-enrich` crate with `TagPipeline` orchestrator
+- [ ] Implement `TaggerCache` backed by filesystem (`.locus/cache/taggers/`)
 - [ ] Implement `TopicTagger` (TF-IDF keyword extraction)
 - [ ] Implement `ConventionTagger` (path pattern matching)
 - [ ] Implement `ComplexityTagger` (heuristic scoring)
 - [ ] Implement `SizeTagger` (byte count buckets)
 - [ ] YAML custom tagger loader and rule evaluator
 - [ ] Integrate `TagPipeline` into `IngestionPipeline` (after parse, before bitmap write)
-- [ ] `biem taggers` CLI command — list active taggers, show cache stats
-- [ ] `biem enrich --force` CLI command — re-run taggers, ignore cache
+- [ ] `locus taggers` CLI command — list active taggers, show cache stats
+- [ ] `locus enrich --force` CLI command — re-run taggers, ignore cache
 - [ ] Unit tests: each builtin tagger against fixture files
 - [ ] Integration test: custom YAML tagger + bitmap query on inferred tags
 - [ ] LLM tagger: `LlmClient` trait + OpenAI/Anthropic/Ollama implementations
@@ -247,7 +247,7 @@ Bitmaps reduce the vector search space from 100K chunks to ~20 chunks. This make
 ### 2.2 Types and traits
 
 ```rust
-// biem-core additions
+// locus-core additions
 
 pub type EmbeddingVector = Vec<f32>;
 
@@ -268,7 +268,7 @@ pub enum ScoreSource {
 ```
 
 ```rust
-// biem-embed
+// locus-embed
 
 /// Generate embeddings for text chunks.
 pub trait Embedder: Send + Sync {
@@ -313,7 +313,7 @@ Design constraint: **local-first**. The default config runs everything on-device
 ### 2.4 Query engine extension
 
 ```rust
-// biem-query additions
+// locus-query additions
 
 pub struct SemanticQueryRequest {
     /// Bitmap pre-filter (required — never search the full vector space)
@@ -340,8 +340,8 @@ The key contract: **bitmap filter is mandatory for semantic queries**. There is 
 
 ### 2.5 Task breakdown
 
-- [ ] Define `Embedder`, `VectorStore`, `Reranker` traits in `biem-core`
-- [ ] Create `biem-embed` crate with trait implementations
+- [ ] Define `Embedder`, `VectorStore`, `Reranker` traits in `locus-core`
+- [ ] Create `locus-embed` crate with trait implementations
 - [ ] Implement `FastEmbedEmbedder` (local, `fastembed` crate)
 - [ ] Implement `InMemoryVectorStore` for tests
 - [ ] Implement `UsearchVectorStore` (persistent, on-disk)
@@ -349,7 +349,7 @@ The key contract: **bitmap filter is mandatory for semantic queries**. There is 
 - [ ] Implement `SemanticQueryRequest` in `BitmapQueryEngine`
 - [ ] Add `search_within` to vector store (bitmap-scoped search)
 - [ ] Implement `FastEmbedReranker` (optional cross-encoder)
-- [ ] `biem search --semantic "query text" --filter "tag:X"` CLI
+- [ ] `locus search --semantic "query text" --filter "tag:X"` CLI
 - [ ] MCP tool: `biem_semantic_search`
 - [ ] HTTP: `POST /search/semantic`
 - [ ] Benchmarks: latency and recall — bitmap-only vs bitmap+vector vs vector-only
@@ -363,7 +363,7 @@ The key contract: **bitmap filter is mandatory for semantic queries**. There is 
 ### 3.1 CodeParser
 
 ```rust
-// biem-code
+// locus-code
 
 pub struct CodeParser {
     /// Map of extension → tree-sitter Language
@@ -393,7 +393,7 @@ impl Parser for CodeParser {
 ### 3.2 Extended ChunkKind
 
 ```rust
-// biem-core additions to ChunkKind
+// locus-core additions to ChunkKind
 
 pub enum ChunkKind {
     // Existing (markdown)
@@ -460,15 +460,15 @@ __pycache__/
 
 ### 3.6 Task breakdown
 
-- [ ] Create `biem-code` crate
+- [ ] Create `locus-code` crate
 - [ ] Implement `CodeParser` with Tree-sitter integration
 - [ ] Rust grammar: function, impl, struct, enum, trait, mod, use extraction
 - [ ] TypeScript grammar: function, class, interface, import extraction
 - [ ] Python grammar: function, class, import, decorator extraction
-- [ ] Extended `ChunkKind` variants in `biem-core`
+- [ ] Extended `ChunkKind` variants in `locus-core`
 - [ ] Code-specific bitmap key generation (lang, kind, visibility, async, import)
 - [ ] `.biemignore` loader and path filtering
-- [ ] `biem init <path> --type code` CLI command
+- [ ] `locus init <path> --type code` CLI command
 - [ ] Multi-repo registration in config (repo name → path mapping)
 - [ ] Integration test: index a Rust crate, query by `lang:rust AND kind:function AND visibility:public`
 - [ ] Integration test: index TS project, query by `import:react AND kind:class`
@@ -494,8 +494,8 @@ max_concurrency = 4
 # API key from environment: OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
 
 [enrichment.custom]
-local_dir = ".biem/taggers"
-global_dir = "~/.biem/taggers"
+local_dir = ".locus/taggers"
+global_dir = "~/.locus/taggers"
 
 [semantic]
 enabled = false
@@ -515,8 +515,8 @@ reranker = "none"           # none | fastembed
 
 | Location | What lives there |
 |----------|-----------------|
-| `~/.biem/` | Global config, global taggers, cross-project bitmap namespace |
-| `.biem/` (project root) | Project config overrides, local taggers, tagger cache, bitmap store, vector store |
+| `~/.locus/` | Global config, global taggers, cross-project bitmap namespace |
+| `.locus/` (project root) | Project config overrides, local taggers, tagger cache, bitmap store, vector store |
 | In-process | Registry (DuckDB), bitmap store (LMDB), vector store (usearch) |
 
 ### Performance targets
@@ -540,18 +540,18 @@ gantt
     axisFormat Week %W
 
     section Enrichment
-    Tagger trait + types (biem-core)               :e1, 2026-05-19, 1w
-    biem-enrich crate + TagPipeline                :e2, after e1, 1w
+    Tagger trait + types (locus-core)               :e1, 2026-05-19, 1w
+    locus-enrich crate + TagPipeline                :e2, after e1, 1w
     Builtin taggers (topic, convention, complexity) :e3, after e2, 2w
     Custom YAML tagger loader                      :e4, after e2, 1w
     Tagger cache (filesystem-backed)               :e5, after e2, 1w
     Integrate into IngestionPipeline               :e6, after e3, 1w
     LLM tagger (opt-in)                            :e7, after e6, 2w
-    CLI: biem taggers, biem enrich                 :e8, after e6, 1w
+    CLI: locus taggers, locus enrich                 :e8, after e6, 1w
 
     section Vectors
-    Embedder + VectorStore traits (biem-core)       :v1, after e1, 1w
-    biem-embed crate + FastEmbed                    :v2, after v1, 2w
+    Embedder + VectorStore traits (locus-core)       :v1, after e1, 1w
+    locus-embed crate + FastEmbed                    :v2, after v1, 2w
     InMemory + Usearch vector stores                :v3, after v2, 2w
     Integrate embedding into ingestion              :v4, after v3, 1w
     SemanticQuery in query engine                   :v5, after v4, 2w
@@ -559,29 +559,29 @@ gantt
     CLI + MCP + HTTP semantic search                :v7, after v5, 1w
 
     section Code
-    biem-code crate + CodeParser trait              :c1, after e1, 1w
+    locus-code crate + CodeParser trait              :c1, after e1, 1w
     Rust grammar + chunk extraction                 :c2, after c1, 2w
     TypeScript grammar                              :c3, after c2, 1w
     Python grammar                                  :c4, after c3, 1w
     Code bitmap key generation                      :c5, after c2, 1w
     .biemignore                                     :c6, after c1, 1w
-    biem init --type code                           :c7, after c5, 1w
+    locus init --type code                           :c7, after c5, 1w
     Multi-repo registration                         :c8, after c7, 1w
 ```
 
 ### Dependency graph
 
 ```
-biem-core (types)
-  ├── biem-enrich (taggers, cache)
-  │     └── integrates into biem-ingest
-  ├── biem-embed (embeddings, vector store)
-  │     └── integrates into biem-ingest + biem-query
-  └── biem-code (tree-sitter parsing)
-        └── plugs into biem-ingest as a Parser impl
+locus-core (types)
+  ├── locus-enrich (taggers, cache)
+  │     └── integrates into locus-ingest
+  ├── locus-embed (embeddings, vector store)
+  │     └── integrates into locus-ingest + locus-query
+  └── locus-code (tree-sitter parsing)
+        └── plugs into locus-ingest as a Parser impl
 ```
 
-All three workstreams share `biem-core` types but are otherwise independent — they can be developed and shipped incrementally.
+All three workstreams share `locus-core` types but are otherwise independent — they can be developed and shipped incrementally.
 
 ---
 
@@ -589,9 +589,9 @@ All three workstreams share `biem-core` types but are otherwise independent — 
 
 Phase 2 is complete when:
 
-1. **Enrichment**: `biem search --filter "concept:auth AND team:payments"` returns results on an Obsidian vault with LLM tagger + custom tagger
-2. **Vectors**: `biem search --semantic "retry logic" --filter "kind:function"` returns scored chunk pointers with bitmap pre-filtering
-3. **Code**: `biem init ~/repos/biem --type code` indexes BIEM itself, and `biem search --filter "lang:rust AND kind:function AND visibility:public"` returns correct results
+1. **Enrichment**: `locus search --filter "concept:auth AND team:payments"` returns results on an Obsidian vault with LLM tagger + custom tagger
+2. **Vectors**: `locus search --semantic "retry logic" --filter "kind:function"` returns scored chunk pointers with bitmap pre-filtering
+3. **Code**: `locus init ~/repos/locusd --type code` indexes BIEM itself, and `locus search --filter "lang:rust AND kind:function AND visibility:public"` returns correct results
 4. **Performance**: enriched index (builtin taggers) at >15K files/s; semantic query <50ms; code parsing >10K files/s
-5. **Cache**: second run of `biem enrich` on unchanged files hits cache, completes at Phase 1 speed
+5. **Cache**: second run of `locus enrich` on unchanged files hits cache, completes at Phase 1 speed
 6. **All Phase 1 tests still pass** — no regressions

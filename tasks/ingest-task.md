@@ -1,4 +1,4 @@
-# Task: Implement biem-ingest (Ingestion Pipeline) ✅
+# Task: Implement locus-ingest (Ingestion Pipeline) ✅
 
 ## Goal
 Implement the `IngestionPipeline` as a concrete coordinator that connects parsers, registry, and bitmap store. Handles both incremental (single event) and bulk (full directory) indexing.
@@ -6,16 +6,16 @@ Implement the `IngestionPipeline` as a concrete coordinator that connects parser
 ## Steps
 
 ### Step 1: Core types and error enum
-- [x] Add `ChangeEvent`, `ChangeKind`, `IngestResult`, `IngestAction`, `BulkIndexResult` to biem-ingest (or re-export from biem-core)
+- [x] Add `ChangeEvent`, `ChangeKind`, `IngestResult`, `IngestAction`, `BulkIndexResult` to locus-ingest (or re-export from locus-core)
 - [x] Add `IngestError` with `#[from]` conversions for ParseError, RegistryError, BitmapError, io::Error
 - [x] Wire up module in `lib.rs`
-- **Validate**: `cargo check -p biem-ingest`
+- **Validate**: `cargo check -p locus-ingest`
 
 ### Step 2: IngestionPipeline struct and constructor
 - [x] Define `IngestionPipeline` holding `Vec<Box<dyn Parser>>`, `Box<dyn Registry>`, `Box<dyn BitmapStore>`
 - [x] Implement `fn new(parsers, registry, bitmap_store) -> Self`
 - [x] Implement `fn find_parser(&self, path) -> Option<&dyn Parser>`
-- **Validate**: `cargo check -p biem-ingest`
+- **Validate**: `cargo check -p locus-ingest`
 
 ### Step 3: Bitmap key generation helpers
 - [x] `fn tag_key(tag: &str) -> BitmapKey` → `"tag:<tag>"`
@@ -23,7 +23,7 @@ Implement the `IngestionPipeline` as a concrete coordinator that connects parser
 - [x] `fn link_key(target: &str) -> BitmapKey` → `"link:<target>"`
 - [x] `fn type_key(note_type: &NoteType) -> BitmapKey` → `"type:<type>"`
 - [x] `fn source_key(source_type: &SourceType) -> BitmapKey` → `"source:<source>"`
-- **Validate**: `cargo check -p biem-ingest`
+- **Validate**: `cargo check -p locus-ingest`
 
 ### Step 4: process_event — Created (new file)
 - [x] Read file content, compute blake3 hash
@@ -32,7 +32,7 @@ Implement the `IngestionPipeline` as a concrete coordinator that connects parser
 - [x] Replace chunks in registry
 - [x] Insert doc_id into bitmap for each tag, folder, link, auto_type, source
 - [x] Return `IngestResult { action: Indexed, bitmaps_updated }`
-- **Validate**: `cargo check -p biem-ingest`
+- **Validate**: `cargo check -p locus-ingest`
 
 ### Step 5: process_event — Modified (existing file changed)
 - [x] Lookup existing doc by path, compute new hash
@@ -42,21 +42,21 @@ Implement the `IngestionPipeline` as a concrete coordinator that connects parser
 - [x] Update doc hash in registry, replace chunks
 - [x] Add doc_id to new bitmap keys, remove from old bitmap keys
 - [x] Return `IngestResult { action: Updated, bitmaps_updated }`
-- **Validate**: `cargo check -p biem-ingest`
+- **Validate**: `cargo check -p locus-ingest`
 
 ### Step 6: process_event — Deleted
 - [x] Lookup doc by path
 - [x] Add doc_id to tombstone bitmap
 - [x] Remove doc_id from all associated bitmaps (tags, links, folder, type, source)
 - [x] Return `IngestResult { action: Tombstoned }`
-- **Validate**: `cargo check -p biem-ingest`
+- **Validate**: `cargo check -p locus-ingest`
 
 ### Step 7: process_event — Renamed
 - [x] Lookup doc by old path (`event.kind.from`)
 - [x] Update path in registry
 - [x] Update folder bitmap if parent dir changed
 - [x] Return `IngestResult { action: Moved }`
-- **Validate**: `cargo check -p biem-ingest`
+- **Validate**: `cargo check -p locus-ingest`
 
 ### Step 8: Unit tests (using in-memory backends)
 - [x] Test Created: new file → doc in registry, bitmaps populated
@@ -65,7 +65,7 @@ Implement the `IngestionPipeline` as a concrete coordinator that connects parser
 - [x] Test Deleted: doc tombstoned, removed from bitmaps
 - [x] Test Renamed: path updated, folder bitmap updated
 - [x] Test NoParser error for unsupported file type
-- **Validate**: `cargo test -p biem-ingest`
+- **Validate**: `cargo test -p locus-ingest`
 
 ### Step 9: bulk_index implementation
 - [x] Walk directory tree, collect parseable files
@@ -74,13 +74,13 @@ Implement the `IngestionPipeline` as a concrete coordinator that connects parser
 - [x] Accumulate bitmap entries, bulk_put to bitmap store
 - [x] Update bitmap catalog in registry
 - [x] Return `BulkIndexResult` with counts and duration
-- **Validate**: `cargo check -p biem-ingest`
+- **Validate**: `cargo check -p locus-ingest`
 
 ### Step 10: bulk_index tests
 - [x] Create temp dir with fixture files, run bulk_index
 - [x] Verify correct doc count, bitmap count
 - [x] Verify registry state matches indexed files
-- **Validate**: `cargo test -p biem-ingest`
+- **Validate**: `cargo test -p locus-ingest`
 
 ### Step 11: Review against contracts
 - [x] Compare implementation against `003-contracts.md` §5

@@ -1,0 +1,43 @@
+[package]
+name = "locus-ingest"
+description = "Ingestion pipeline — orchestrates parsers, registry, and bitmap store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+locus-core = { workspace = true }
+locus-parser = { workspace = true }
+locus-registry = { workspace = true }
+locus-bitmap = { workspace = true }
+locus-query = { workspace = true }
+locus-enrich = { workspace = true }
+blake3 = { workspace = true }
+roaring = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+tempfile = "3"
+duckdb = { workspace = true }
+petgraph = "0.7"
+ignore = "0.4"
+
+[[bin]]
+name = "locus-scale-test"
+path = "src/bin/locus_scale_test.rs"
+
+[dev-dependencies]
+tempfile = "3"
+locus-code = { workspace = true }
+criterion = { workspace = true }
+rand = { workspace = true }
+locus-core = { workspace = true }
+locus-parser = { workspace = true }
+locus-registry = { workspace = true }
+locus-bitmap = { workspace = true }
+locus-query = { workspace = true }
+
+[[bench]]
+name = "ingest_bench"
+harness = false

@@ -15,7 +15,7 @@ Five contradictions found, two moderate and three minor. None require large rewr
 
 ### The contradiction
 
-**Phase 1 code** (`biem-core/src/types.rs`):
+**Phase 1 code** (`locus-core/src/types.rs`):
 ```rust
 pub enum SourceType {
     Obsidian,
@@ -24,7 +24,7 @@ pub enum SourceType {
 ```
 
 **Phase 2 plan** (Workstream 3, code intelligence):
-> `biem init <path> --type code` — register a code repository
+> `locus init <path> --type code` — register a code repository
 
 **Config** (`config.toml` in 005):
 ```toml
@@ -58,10 +58,10 @@ No `source_type` field. The config assumes everything is a "vault" (Obsidian). A
 
 | Change | Scope | When |
 |--------|-------|------|
-| Add `Code` variant to `SourceType` | `biem-core/types.rs` | Start of Workstream 3 |
-| Rename `VaultEntry` → `SourceEntry`, add `source_type: SourceType` field | `biem-core/config.rs` | Start of Workstream 3 |
-| Rename `vaults` → `sources` in `BiemConfig` | `biem-core/config.rs` | Start of Workstream 3 |
-| Rename CLI references from "vault" → "source" where generic | `biem-cli` | Start of Workstream 3 |
+| Add `Code` variant to `SourceType` | `locus-core/types.rs` | Start of Workstream 3 |
+| Rename `VaultEntry` → `SourceEntry`, add `source_type: SourceType` field | `locus-core/config.rs` | Start of Workstream 3 |
+| Rename `vaults` → `sources` in `BiemConfig` | `locus-core/config.rs` | Start of Workstream 3 |
+| Rename CLI references from "vault" → "source" where generic | `locus-cli` | Start of Workstream 3 |
 | Rename config section `[vaults.*]` → `[sources.*]` | Config format | Breaking config change — needs migration note |
 | Update `001-system-overview.md` and `003-contracts.md` | Docs | Same PR |
 
@@ -92,7 +92,7 @@ pub enum BitmapCategory {
 - Enrichment: `topic:*`, `concept:*`, `intent:*`, `quality:*`, `complexity:*`, `convention:*`, `team:*`, `domain:*`, `priority:*`
 - Code: `lang:*`, `kind:*`, `visibility:*`, `async:*`, `import:*`, `repo:*`
 
-None of these fit the existing 5 categories. The catalog uses `BitmapCategory` to filter keys — if enrichment/code keys don't have a category, `biem bitmaps --category tag` works but there's no way to list only enrichment keys or code keys.
+None of these fit the existing 5 categories. The catalog uses `BitmapCategory` to filter keys — if enrichment/code keys don't have a category, `locus bitmaps --category tag` works but there's no way to list only enrichment keys or code keys.
 
 ### Resolution
 
@@ -161,7 +161,7 @@ This is used in `DocRecord.auto_type` and in bitmap keys (`type:task`, `type:moc
 
 A code file isn't a "note" or a "task". The `NoteType` enum doesn't accommodate code document types. The feature set doc shows `doc_type` as a `String` in `MatchPointer`, which already differs from the code's `Option<NoteType>`.
 
-**Phase 2 plan** also shows extended `ChunkKind` variants (`Function`, `Class`, etc.) — these are already in `biem-core`'s `ChunkKind` enum, which is correct. But the *document-level* type is still `NoteType`.
+**Phase 2 plan** also shows extended `ChunkKind` variants (`Function`, `Class`, etc.) — these are already in `locus-core`'s `ChunkKind` enum, which is correct. But the *document-level* type is still `NoteType`.
 
 ### Resolution
 
@@ -227,7 +227,7 @@ pub struct BiemConfig {
 
 **Phase 1 code** — state directory per vault:
 ```
-~/.biem/vaults/<vault-hash>/
+~/.locus/vaults/<vault-hash>/
   registry.duckdb
   bitmaps.lmdb/
 ```
@@ -265,15 +265,15 @@ fn source_hash(path: &Path, source_type: &SourceType) -> String {
 
 Alternatively, use the source name (the TOML key) as the directory name:
 ```
-~/.biem/sources/notes/
+~/.locus/sources/notes/
   registry.duckdb
   bitmaps.lmdb/
-~/.biem/sources/code/
+~/.locus/sources/code/
   registry.duckdb
   bitmaps.lmdb/
 ```
 
-**Recommendation**: Use the source name as directory name (not a hash). It's human-readable, debuggable, and avoids the collision problem entirely. The hash approach is opaque. This also means the `data_dir` field in `VaultEntry`/`SourceEntry` is computed from `~/.biem/sources/<name>/`.
+**Recommendation**: Use the source name as directory name (not a hash). It's human-readable, debuggable, and avoids the collision problem entirely. The hash approach is opaque. This also means the `data_dir` field in `VaultEntry`/`SourceEntry` is computed from `~/.locus/sources/<name>/`.
 
 **When**: Part of the vault→source rename in Workstream 3.
 

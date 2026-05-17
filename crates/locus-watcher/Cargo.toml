@@ -1,0 +1,16 @@
+[package]
+name = "locus-watcher"
+description = "SourceFeed trait and filesystem watcher implementation"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+locus-core = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+globset = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

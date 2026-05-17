@@ -1,7 +1,7 @@
 # Naming Exploration
 
-> Status: **Open** — parked for follow-up before any public release
-> Context: "BIEM" (Bit-Indexed External Memory) describes the implementation, not the purpose
+> Status: **Decided** — renamed from BIEM to Locus/locusd
+> Context: "BIEM" (Bit-Indexed External Memory) described the implementation, not the purpose
 
 ## What it does (user perspective)
 
@@ -26,21 +26,26 @@
 | **Lens** | Look through it to find things | `lens search` | Very common word |
 | **Apex** | All-Purpose EXternal index | `apex search` | Generic, likely taken |
 
-## Current recommendation
-
-**Locus** — short, meaningful (returns locations/pointers), unclaimed in Rust/dev-tools, daemon name `locusd` works, scales from personal vault to multi-repo.
-
-Runner-up: **Sieve** — leans into the noise-elimination value prop.
-
-## Rename scope (when ready)
-
-- Repo name
-- Crate prefixes (`locus-core`, `locus-parser`, etc.)
-- Binary names (`locus`, `locusd`)
-- Config dir (`~/.locus/`)
-- All docs and README
-- Copilot instructions
-
 ## Decision
 
-TBD — revisit before first public release.
+**locusd** — domain `locusd.ai` is affordable (vs $500k for `locus.ai`). Keeps the Latin root, follows established precedent (snapd/snap, etcd/etcdctl, containerd/ctr).
+
+- **Daemon / brand**: `locusd` (binary name, repo name, domain)
+- **Client CLI**: `locus` (clean root word, user-facing)
+- **Config dir**: `~/.locus/`
+- **Crate prefixes**: `locus-core`, `locus-parser`, etc.
+
+Precedent: `snapd`/`snap` is the closest parallel — daemon gets the `d`, client is the clean root.
+
+## Rename scope ✅
+
+- [x] Repo renamed from `biem` → `locusd`
+- [x] Workspace `Cargo.toml` — crate paths updated
+- [x] All 12 crates renamed: `biem-*` → `locus-*` (dirs + `Cargo.toml` + internal deps)
+- [x] Binary names: `biem` → `locus`, `biemd` → `locusd`
+- [x] Config dir references: `~/.locus/` → `~/.locus/`
+- [x] All `use biem_*` imports → `use locus_*`
+- [x] Docs updated (`001-system-overview.md`, `002-roadmap.md`, `003-contracts.md`, this file)
+- [x] CLAUDE.md updated
+- [x] `.github/copilot-instructions.md` updated
+- [x] Task files in `tasks/` updated

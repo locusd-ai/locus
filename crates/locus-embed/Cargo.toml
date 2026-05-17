@@ -1,0 +1,19 @@
+[package]
+name = "locus-embed"
+description = "Embedding and vector search for BIEM"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+locus-core = { workspace = true }
+tracing = { workspace = true }
+fastembed = { workspace = true, optional = true }
+usearch = { workspace = true, optional = true }
+
+[features]
+default = ["fastembed-embedder", "usearch-store"]
+fastembed-embedder = ["dep:fastembed"]
+usearch-store = ["dep:usearch"]
+
+[dev-dependencies]
+tempfile = { workspace = true }

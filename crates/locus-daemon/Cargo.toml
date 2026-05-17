@@ -1,0 +1,32 @@
+[package]
+name = "locus-daemon"
+description = "Daemon binary for Locus (locusd) — watcher, ingestion, optional MCP/HTTP"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "locusd"
+path = "src/main.rs"
+
+[dependencies]
+locus-core = { workspace = true }
+locus-query = { workspace = true }
+locus-ingest = { workspace = true }
+locus-watcher = { workspace = true }
+locus-bitmap = { workspace = true }
+locus-registry = { workspace = true }
+locus-parser = { workspace = true }
+locus-code = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rmcp = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true }

@@ -1,11 +1,11 @@
-# BIEM Feature Set
+# Locus Feature Set
 
 > Status: **Living document** — defines what BIEM does today and where it's heading.
 > Reference: `001-system-overview.md` for architecture, `002-roadmap.md` for phased delivery
 
 ## Vision
 
-BIEM is a **universal pointer system for LLMs**. It answers "where is the thing I need?" in constant time, across any source — code, docs, wikis, infra configs, tickets — without ever returning content. The LLM gets precise structural pointers (file, byte range, chunk kind, metadata) and decides what to read.
+Locus is a **universal pointer system for LLMs**. It answers "where is the thing I need?" in constant time, across any source — code, docs, wikis, infra configs, tickets — without ever returning content. The LLM gets precise structural pointers (file, byte range, chunk kind, metadata) and decides what to read.
 
 Think of BIEM as the **index at the back of the book** — it doesn't contain the chapters, it tells you exactly which page to turn to. Except the book is your entire digital workspace, and the reader is an LLM that needs to minimise context pollution.
 
@@ -13,7 +13,7 @@ Think of BIEM as the **index at the back of the book** — it doesn't contain th
 
 ## What BIEM Is (and Isn't)
 
-| BIEM is | BIEM is not |
+| Locus is | Locus is not |
 |---------|-------------|
 | A pre-filter / pointer layer | A knowledge graph (no traversal, no relationship edges) |
 | Constant-time set operations (AND/OR/NOT) | A full-text search engine (no term indexing) |
@@ -157,7 +157,7 @@ jaccard_keys("tag:auth", "tag:authentication") → 0.92
 jaccard_keys("tag:k8s", "tag:kubernetes")      → 0.88
 ```
 
-High Jaccard (> 0.8) between two tag bitmaps means they index nearly the same documents — likely synonyms. Surface this in `biem bitmaps` or `biem status` so users can merge/alias tags.
+High Jaccard (> 0.8) between two tag bitmaps means they index nearly the same documents — likely synonyms. Surface this in `locus bitmaps` or `locus status` so users can merge/alias tags.
 
 #### 2. Document similarity (without embeddings)
 
@@ -187,11 +187,11 @@ When a tagger produces a new key, check Jaccard against all existing keys:
 
 - **J > 0.9** with an existing key → redundant tagger output, warn or suppress
 - **J < 0.1** with all keys → highly specific, good discriminator
-- Useful in `biem status` to surface tagger health and bitmap hygiene
+- Useful in `locus status` to surface tagger health and bitmap hygiene
 
 #### 5. Bitmap catalog clustering
 
-Group similar keys together in `biem bitmaps` output so LLMs can discover filters without scanning hundreds of keys. Keys with high mutual Jaccard form natural clusters.
+Group similar keys together in `locus bitmaps` output so LLMs can discover filters without scanning hundreds of keys. Keys with high mutual Jaccard form natural clusters.
 
 ---
 
@@ -201,22 +201,22 @@ Group similar keys together in `biem bitmaps` output so LLMs can discover filter
 
 | Interface | Features |
 |-----------|----------|
-| **CLI (`biem`)** | `init`, `config`, `status`, `search`, `inspect`, `bitmaps`, `compact` |
+| **CLI (`locus`)** | `init`, `config`, `status`, `search`, `inspect`, `bitmaps`, `compact` |
 | **MCP Server** | `biem_search`, `biem_inspect`, `biem_status`, `biem_bitmaps` tools |
 | **HTTP API** | `POST /search`, `GET /status`, `GET /inspect/:path`, `GET /bitmaps` |
-| **Daemon (`biemd`)** | File watcher + MCP + HTTP in one process |
+| **Daemon (`locusd`)** | File watcher + MCP + HTTP in one process |
 
 ### Planned
 
 | Feature | Description |
 |---------|-------------|
-| **`biem init <path> --type code`** | Register a code repository, run Tree-sitter indexing |
-| **`biem add <url>`** | Fetch and index a remote source (Confluence page, Git repo) |
-| **`biem sources`** | List registered sources with index health per source |
-| **`biem diff <file>`** | Show what changed since last index (tags added/removed) |
+| **`locus init <path> --type code`** | Register a code repository, run Tree-sitter indexing |
+| **`locus add <url>`** | Fetch and index a remote source (Confluence page, Git repo) |
+| **`locus sources`** | List registered sources with index health per source |
+| **`locus diff <file>`** | Show what changed since last index (tags added/removed) |
 | **MCP resource: vault metadata** | Expose bitmap catalog as MCP resource for discovery |
 | **MCP hooks** | Auto-rebuild on file save via MCP PreToolUse hooks |
-| **Global graph** | `~/.biem/global.json` — cross-project bitmap namespace |
+| **Global graph** | `~/.locus/global.json` — cross-project bitmap namespace |
 
 ---
 
@@ -325,7 +325,7 @@ file bytes ──→ Parser (structural)
                   │     ├── IntentTagger      — "what does this do?" → intent:validation, intent:serialization
                   │     └── QualityTagger     — "any issues?" → quality:todo, quality:dead-code, quality:missing-tests
                   │
-                  └── CustomTaggers (user-defined, from .biem/taggers/)
+                  └── CustomTaggers (user-defined, from .locus/taggers/)
                         ├── YAML rule files   — pattern matching on paths, content, existing tags
                         └── Script taggers    — executable that reads ParseResult JSON, emits tags
                   │
@@ -341,7 +341,7 @@ file bytes ──→ Parser (structural)
 The tagger cache ensures expensive enrichment runs **once per file version**:
 
 ```
-.biem/cache/taggers/
+.locus/cache/taggers/
   ├── <blake3_hash_1>.json    ← { "builtin": ["topic:auth", "complexity:low"], "llm": ["concept:jwt-validation"], "custom": ["team:platform"] }
   ├── <blake3_hash_2>.json
   └── ...
@@ -360,12 +360,12 @@ This means:
 - **Builtin taggers** add negligible overhead (keyword extraction on already-parsed content).
 - **Cache survives restarts** — it's on disk alongside the bitmap store.
 
-### Custom Tagger Rules (`.biem/taggers/`)
+### Custom Tagger Rules (`.locus/taggers/`)
 
 Users define domain-specific tagging without writing code:
 
 ```yaml
-# .biem/taggers/team-ownership.yaml
+# .locus/taggers/team-ownership.yaml
 name: team-ownership
 rules:
   - match:
@@ -382,7 +382,7 @@ rules:
 ```
 
 ```yaml
-# .biem/taggers/priority.yaml
+# .locus/taggers/priority.yaml
 name: priority-signals
 rules:
   - match:
@@ -395,16 +395,16 @@ rules:
     add_tags: ["attention:recent-auth-change"]
 ```
 
-This turns BIEM into a **programmable metadata layer**. The LLM can discover these tags via `biem bitmaps` and use them in queries:
+This turns Locus into a **programmable metadata layer**. The LLM can discover these tags via `locus bitmaps` and use them in queries:
 
 ```
-biem search --filter "team:payments AND priority:tech-debt AND kind:function"
+locus search --filter "team:payments AND priority:tech-debt AND kind:function"
 → 3 file pointers in 19µs
 ```
 
 ### What This Fills
 
-| Gap (from "BIEM is not") | How taggers fill it |
+| Gap (from "Locus is not") | How taggers fill it |
 |--------------------------|-------------------|
 | No relationship inference | LLM tagger infers `concept:*` and `intent:*` → queryable as bitmap keys |
 | No community detection | Custom taggers define `team:*`, `domain:*` → same effect, explicit |
@@ -418,11 +418,11 @@ The key insight: **you don't need graph traversal if you have rich enough bitmap
 
 | Scope | Location | Use case |
 |-------|----------|----------|
-| **Project-local** | `.biem/taggers/` | Team ownership, domain mapping, project-specific conventions |
-| **Global** | `~/.biem/taggers/` | Cross-project standards (language patterns, quality signals) |
+| **Project-local** | `.locus/taggers/` | Team ownership, domain mapping, project-specific conventions |
+| **Global** | `~/.locus/taggers/` | Cross-project standards (language patterns, quality signals) |
 | **Built-in** | Compiled into BIEM | Topic, complexity, pattern detection — always available |
 
-Global taggers apply to all registered sources. A company could distribute a shared `~/.biem/taggers/company-standards.yaml` that tags everything with `org:*`, `compliance:*`, `data-classification:*` keys.
+Global taggers apply to all registered sources. A company could distribute a shared `~/.locus/taggers/company-standards.yaml` that tags everything with `org:*`, `compliance:*`, `data-classification:*` keys.
 
 ---
 
@@ -433,4 +433,4 @@ Global taggers apply to all registered sources. A company could distribute a sha
 3. **Source-agnostic** — Any parseable content gets the same bitmap treatment. A Terraform module and an Obsidian note are both documents with tags, types, and chunks.
 4. **No LLM dependency** — Indexing is pure structural parsing (frontmatter, AST, schema). No API calls, no embeddings, no inference. Deterministic and reproducible.
 5. **Incremental by default** — blake3 hash-based change detection. Only touched files re-index.
-6. **Composable** — BIEM is a layer, not a platform. It feeds into knowledge graphs, vector DBs, LLM tool calls, or anything that needs "which files match these criteria?"
+6. **Composable** — Locus is a layer, not a platform. It feeds into knowledge graphs, vector DBs, LLM tool calls, or anything that needs "which files match these criteria?"

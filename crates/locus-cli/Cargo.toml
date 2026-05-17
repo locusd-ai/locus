@@ -1,0 +1,25 @@
+[package]
+name = "locus-cli"
+description = "CLI binary for Locus (locus)"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "locus"
+path = "src/main.rs"
+
+[dependencies]
+locus-core = { workspace = true }
+locus-query = { workspace = true }
+locus-bitmap = { workspace = true }
+locus-registry = { workspace = true }
+locus-ingest = { workspace = true }
+locus-parser = { workspace = true }
+locus-code = { workspace = true }
+locus-enrich = { workspace = true }
+locus-embed = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }

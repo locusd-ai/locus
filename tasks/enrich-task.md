@@ -4,19 +4,19 @@
 
 ## Steps
 
-### Step 1 — Core types in `biem-core`
-- [x] Add `TaggerResult`, `EnrichmentCache` types to `biem-core/src/types.rs`
+### Step 1 — Core types in `locus-core`
+- [x] Add `TaggerResult`, `EnrichmentCache` types to `locus-core/src/types.rs`
 - [x] Add `Enrichment`, `Custom` variants to `BitmapCategory`
-- [x] Add `EnrichError` to a new `biem-core/src/enrich.rs` module
-- [x] Add `Tagger` trait and `TaggerCache` trait to `biem-core/src/enrich.rs`
+- [x] Add `EnrichError` to a new `locus-core/src/enrich.rs` module
+- [x] Add `Tagger` trait and `TaggerCache` trait to `locus-core/src/enrich.rs`
 - [x] Re-export from `lib.rs`
 - [x] Update `003-contracts.md` with enrichment types and traits
 - [x] `cargo test` passes
 
 **Commit**: `feat(core): add enrichment types and Tagger/TaggerCache traits`
 
-### Step 2 — Create `biem-enrich` crate with `TagPipeline`
-- [x] Create `crates/biem-enrich/` with `Cargo.toml`
+### Step 2 — Create `locus-enrich` crate with `TagPipeline`
+- [x] Create `crates/locus-enrich/` with `Cargo.toml`
 - [x] Add to workspace `Cargo.toml`
 - [x] Implement `TagPipeline` struct: holds `Vec<Box<dyn Tagger>>` + `Box<dyn TaggerCache>`
 - [x] `TagPipeline::enrich(path, content, parse_result) -> Vec<String>` — runs taggers, merges results
@@ -25,7 +25,7 @@
 - [x] Unit test: pipeline with mock tagger returns its tags
 - [x] Unit test: cache hit skips tagger execution
 
-**Commit**: `feat(enrich): create biem-enrich crate with TagPipeline`
+**Commit**: `feat(enrich): create locus-enrich crate with TagPipeline`
 
 ### Step 3 — Filesystem-backed `TaggerCache`
 - [x] Implement `FsTaggerCache` — reads/writes JSON files keyed by blake3 hash
@@ -48,7 +48,7 @@
 ### Step 5 — Custom YAML tagger loader
 - [x] Define YAML schema: `name`, `version`, `rules[]` with `match` + `add_tags`
 - [x] Match conditions: `folder`, `extension`, `has_tag`, `content_contains`
-- [x] Load from `.biem/taggers/` and `~/.biem/taggers/` (project-local takes precedence)
+- [x] Load from `.locus/taggers/` and `~/.locus/taggers/` (project-local takes precedence)
 - [x] Implement as `Tagger` trait object
 - [x] Unit test: YAML rule matches folder pattern
 - [x] Unit test: YAML rule matches has_tag condition
@@ -67,9 +67,9 @@
 **Commit**: `feat(ingest): integrate TagPipeline into ingestion`
 
 ### Step 7 — CLI commands
-- [x] `biem taggers` — list active taggers (builtin + custom), show cache stats
-- [x] `biem enrich --force` — re-run all taggers, ignore cache
-- [x] Wire up enrichment config in `biem init` and `biem index`
+- [x] `locus taggers` — list active taggers (builtin + custom), show cache stats
+- [x] `locus enrich --force` — re-run all taggers, ignore cache
+- [x] Wire up enrichment config in `locus init` and `locus index`
 
 **Commit**: `feat(cli): add taggers and enrich commands`
 
@@ -84,6 +84,6 @@
 ## Validation
 
 - [x] All existing Phase 1 tests still pass (no regressions)
-- [x] `biem search --filter "size:small AND tag:work"` works on an enriched index
-- [x] Cache hit: second `biem index` on unchanged vault skips taggers, same speed as Phase 1
+- [x] `locus search --filter "size:small AND tag:work"` works on an enriched index
+- [x] Cache hit: second `locus index` on unchanged vault skips taggers, same speed as Phase 1
 - [x] Custom YAML tagger produces queryable bitmap keys

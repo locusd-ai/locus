@@ -5,13 +5,13 @@
 ## Pre-work: Type system alignment (from 006-phase2-alignment.md)
 
 ### Step 0a — Extend `SourceType` and rename `VaultEntry` → `SourceEntry`
-- [x] Add `Code` variant to `SourceType` in `biem-core/src/types.rs`
-- [x] Update `source_key()` match in `biem-ingest/src/pipeline.rs`
-- [x] Rename `VaultEntry` → `SourceEntry`, add `source_type: SourceType` field in `biem-core/src/config.rs`
+- [x] Add `Code` variant to `SourceType` in `locus-core/src/types.rs`
+- [x] Update `source_key()` match in `locus-ingest/src/pipeline.rs`
+- [x] Rename `VaultEntry` → `SourceEntry`, add `source_type: SourceType` field in `locus-core/src/config.rs`
 - [x] Rename `vaults` → `sources` in `BiemConfig`
 - [x] Update `register_vault` → `register_source`, `resolve_vault` → `resolve_source`
-- [x] Update state directory: `~/.biem/sources/<name>/` instead of `~/.biem/vaults/<hash>/`
-- [x] Update all callers in `biem-cli`, `biem-daemon`
+- [x] Update state directory: `~/.locus/sources/<name>/` instead of `~/.locus/vaults/<hash>/`
+- [x] Update all callers in `locus-cli`, `locus-daemon`
 - [x] Update config TOML format: `[vaults.*]` → `[sources.*]`
 - [x] Add migration note for existing configs
 - [x] `cargo test` passes, `cargo check` zero warnings
@@ -19,7 +19,7 @@
 **Commit**: `refactor(core): rename VaultEntry to SourceEntry, vaults to sources`
 
 ### Step 0b — Rename `NoteType` → `DocType`, add code variants
-- [x] Rename `NoteType` → `DocType` in `biem-core/src/types.rs`
+- [x] Rename `NoteType` → `DocType` in `locus-core/src/types.rs`
 - [x] Add variants: `SourceFile`, `TestFile`, `ConfigFile`
 - [x] Update `ParseResult.auto_type` type
 - [x] Update all match arms and references across crates
@@ -38,8 +38,8 @@
 
 ## Steps
 
-### Step 1 — Create `biem-code` crate with `CodeParser` skeleton
-- [x] Create `crates/biem-code/` with `Cargo.toml`
+### Step 1 — Create `locus-code` crate with `CodeParser` skeleton
+- [x] Create `crates/locus-code/` with `Cargo.toml`
 - [x] Add to workspace `Cargo.toml`
 - [x] Add `tree-sitter` and `tree-sitter-rust` dependencies
 - [x] Implement `CodeParser` struct with language registry (`HashMap<String, Language>`)
@@ -47,7 +47,7 @@
 - [x] Implement `parse` skeleton: returns empty `ParseResult` for now
 - [x] Unit test: `can_parse` returns true for `.rs`, false for `.md`
 
-**Commit**: `feat(code): create biem-code crate with CodeParser skeleton`
+**Commit**: `feat(code): create locus-code crate with CodeParser skeleton`
 
 ### Step 2 — Rust grammar: AST walking and chunk extraction
 - [x] Parse Rust source with `tree-sitter-rust`
@@ -84,15 +84,15 @@
 
 **Commit**: `feat(ingest): add .biemignore support`
 
-### Step 5 — `biem init --type code` and multi-repo registration
-- [x] `biem init <path> --type code` registers a code source
+### Step 5 — `locus init --type code` and multi-repo registration
+- [x] `locus init <path> --type code` registers a code source
 - [x] Config stores `source_type: Code` in `SourceEntry`
 - [x] Ingestion pipeline selects `CodeParser` when `source_type == Code`
 - [x] Support multiple sources (both Obsidian vaults and code repos in same config)
-- [x] `biem status` shows per-source stats
+- [x] `locus status` shows per-source stats
 - [ ] Integration test: init a code repo, verify it indexes `.rs` files
 
-**Commit**: `feat(cli): add code source registration with biem init --type code`
+**Commit**: `feat(cli): add code source registration with locus init --type code`
 
 ### Step 6 — TypeScript grammar
 - [x] Add `tree-sitter-typescript` dependency
@@ -118,11 +118,11 @@
 **Commit**: `feat(code): add Python grammar support`
 
 ### Step 8 — Integration tests and dogfooding
-- [x] Index BIEM's own codebase: `biem init ./crates --type code`
+- [x] Index BIEM's own codebase: `locus init ./crates --type code`
 - [x] Query: `lang:rust AND kind:function AND visibility:public` → returns public functions
 - [x] Query: `import:roaring AND kind:function` → functions in files using roaring
 - [ ] Query: `kind:test` → test functions across all crates
-- [ ] Semantic query: `biem semantic "bitmap intersection" --filter "lang:rust AND kind:function"`
+- [ ] Semantic query: `locus semantic "bitmap intersection" --filter "lang:rust AND kind:function"`
 - [x] Verify chunk labels match actual function/struct names
 - [x] Verify byte ranges are accurate (can extract correct source from file)
 - [x] Performance: measure parsing throughput (files/s)
@@ -142,11 +142,11 @@
 ## Validation
 
 - [ ] All existing tests still pass (no regressions)
-- [ ] `biem init <rust-project> --type code` indexes Rust source files
-- [ ] `biem search --filter "lang:rust AND kind:function"` returns functions
-- [ ] `biem search --filter "visibility:public AND kind:function"` filters correctly
-- [ ] `biem search --filter "import:serde"` finds files using serde
-- [ ] `biem semantic "error handling" --filter "lang:rust"` returns ranked results
+- [ ] `locus init <rust-project> --type code` indexes Rust source files
+- [ ] `locus search --filter "lang:rust AND kind:function"` returns functions
+- [ ] `locus search --filter "visibility:public AND kind:function"` filters correctly
+- [ ] `locus search --filter "import:serde"` finds files using serde
+- [ ] `locus semantic "error handling" --filter "lang:rust"` returns ranked results
 - [ ] TypeScript and Python files parse and index correctly
 - [ ] `.biemignore` excludes `target/`, `node_modules/` etc.
 - [ ] Multiple sources (Obsidian + code) coexist in config and query independently

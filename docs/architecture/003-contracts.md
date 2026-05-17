@@ -1,4 +1,4 @@
-# BIEM Module Contracts
+# Locus Module Contracts
 
 > Status: **Phase 1 — implemented and aligned with code**
 > Reference: `001-system-overview.md` for architecture context
@@ -11,7 +11,7 @@ This document defines the Rust types and trait signatures at every module bounda
 
 ## 1. Shared Types
 
-Types used across multiple modules. These live in a `biem-core` crate.
+Types used across multiple modules. These live in a `locus-core` crate.
 
 ```rust
 use std::collections::HashMap;
@@ -192,7 +192,7 @@ sequenceDiagram
 
 The ingestion pipeline holds a `Vec<Box<dyn Parser>>` (the "parser registry") and selects the first parser that returns `true` for `can_parse`.
 
-### Code Parser (biem-code)
+### Code Parser (locus-code)
 
 The `CodeParser` uses Tree-sitter grammars for AST-aware chunking. Currently supports:
 
@@ -516,7 +516,7 @@ pub enum BitmapCategory {
 }
 ```
 
-Inferred tags are indexed as regular bitmap keys (e.g. `topic:auth`, `size:small`). The `Enrichment` category is used in the bitmap catalog for discovery and filtering via `biem bitmaps --category enrichment`.
+Inferred tags are indexed as regular bitmap keys (e.g. `topic:auth`, `size:small`). The `Enrichment` category is used in the bitmap catalog for discovery and filtering via `locus bitmaps --category enrichment`.
 
 ---
 
@@ -646,7 +646,7 @@ pub struct FsWatcherConfig {
     pub root: PathBuf,
     /// Debounce duration in milliseconds
     pub debounce_ms: u64,
-    /// Glob patterns to ignore (e.g. ".obsidian/**", ".biem/**")
+    /// Glob patterns to ignore (e.g. ".obsidian/**", ".locus/**")
     pub ignore_patterns: Vec<String>,
 }
 
@@ -832,15 +832,15 @@ The interface layer translates protocol-specific requests into `QueryRequest` an
 ### 8.2 CLI Commands
 
 ```
-biem search --filter "tag:work AND type:task AND NOT folder:/archive" --limit 10
-biem search --tag work --type task --limit 10       # shorthand
-biem inspect /path/to/note.md
-biem status
-biem filters [--category tag|folder|link|type]
-biem bitmaps                                         # alias for filters
-biem init <path> [--local]
-biem config [--storage local|global]
-biem compact
+locus search --filter "tag:work AND type:task AND NOT folder:/archive" --limit 10
+locus search --tag work --type task --limit 10       # shorthand
+locus inspect /path/to/note.md
+locus status
+locus filters [--category tag|folder|link|type]
+locus bitmaps                                         # alias for filters
+locus init <path> [--local]
+locus config [--storage local|global]
+locus compact
 ```
 
 ### 8.3 HTTP API
@@ -863,18 +863,18 @@ See §11 Q4 for the updated dependency graph and crate structure.
 ## 10. Crate Structure (Proposed)
 
 ```
-biem/
+locus/
 ├── Cargo.toml              # workspace root
 ├── crates/
-│   ├── biem-core/          # shared types, error types
-│   ├── biem-parser/        # Parser trait + MarkdownParser
-│   ├── biem-registry/      # Registry trait + DuckDB implementation
-│   ├── biem-bitmap/        # BitmapStore trait + LMDB implementation
-│   ├── biem-ingest/        # IngestionPipeline
-│   ├── biem-watcher/       # SourceFeed trait + FsWatcher
-│   ├── biem-query/         # QueryEngine
-│   ├── biem-cli/           # `biem` binary
-│   └── biem-daemon/        # `biemd` binary (watcher + optional MCP/HTTP)
+│   ├── locus-core/          # shared types, error types
+│   ├── locus-parser/        # Parser trait + MarkdownParser
+│   ├── locus-registry/      # Registry trait + DuckDB implementation
+│   ├── locus-bitmap/        # BitmapStore trait + LMDB implementation
+│   ├── locus-ingest/        # IngestionPipeline
+│   ├── locus-watcher/       # SourceFeed trait + FsWatcher
+│   ├── locus-query/         # QueryEngine
+│   ├── locus-cli/           # `locus` binary
+│   └── locus-daemon/        # `locusd` binary (watcher + optional MCP/HTTP)
 ├── docs/
 │   └── architecture/
 └── tests/                  # Integration tests
@@ -919,18 +919,18 @@ Reasons:
 
 Each module defines its own error enum:
 ```rust
-// biem-registry
+// locus-registry
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError { ... }
 
-// biem-bitmap
+// locus-bitmap
 #[derive(Debug, thiserror::Error)]
 pub enum BitmapError { ... }
 ```
 
 Higher-level modules (ingestion, query engine) define errors that wrap lower-level ones:
 ```rust
-// biem-ingest
+// locus-ingest
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
     #[error("registry: {0}")]
@@ -1006,11 +1006,11 @@ The trait exists for testability (in-memory mock) more than for swapping backend
 
 ### Q4: Binary layout + daemon architecture
 
-**Decision: Two binaries — `biem` (CLI) and `biemd` (daemon). Daemon runs watcher + ingestion and optionally exposes MCP and HTTP.**
+**Decision: Two binaries — `locus` (CLI) and `locusd` (daemon). Daemon runs watcher + ingestion and optionally exposes MCP and HTTP.**
 
 ```mermaid
 graph LR
-    subgraph biem["biem (CLI binary)"]
+    subgraph locus["locus (CLI binary)"]
         CLI_CMD["search, inspect, status,<br/>init, config, compact"]
     end
 
@@ -1022,7 +1022,7 @@ graph LR
         QE["Query Engine"]
     end
 
-    biem -- "connects to daemon<br/>(Unix socket / HTTP)" --> biemd
+    locus -- "connects to daemon<br/>(Unix socket / HTTP)" --> locusd
     MCP_S --> QE
     HTTP_S --> QE
     CLI_CMD --> QE
@@ -1036,9 +1036,9 @@ biemd --mcp                     # start daemon + MCP server
 biemd --http                    # start daemon + HTTP API
 biemd --mcp --http              # start daemon + both
 
-biem search --tag work          # CLI talks to running daemon
-biem init /path/to/vault        # registers vault, daemon picks it up
-biem status                     # queries daemon for index health
+locus search --tag work          # CLI talks to running daemon
+locus init /path/to/vault        # registers vault, daemon picks it up
+locus status                     # queries daemon for index health
 ```
 
 **Why two binaries**:
@@ -1049,27 +1049,27 @@ biem status                     # queries daemon for index health
 **CLI fallback for development**: During early development (before the daemon exists), the CLI can open databases directly in "standalone" mode. This lets us build and test the foundation crates without needing the daemon yet.
 
 ```
-biem search --tag work                    # connects to daemon (default)
-biem search --tag work --standalone       # opens DB directly (dev mode)
+locus search --tag work                    # connects to daemon (default)
+locus search --tag work --standalone       # opens DB directly (dev mode)
 ```
 
-**Is it difficult to change later?** No. The key insight is that both `biem` and `biemd` depend on the same `biem-query` crate. The binary layout is just plumbing — which binary instantiates the query engine. Merging them into a single binary later (or splitting further) is a half-day refactor because the actual logic lives in library crates.
+**Is it difficult to change later?** No. The key insight is that both `locus` and `locusd` depend on the same `locus-query` crate. The binary layout is just plumbing — which binary instantiates the query engine. Merging them into a single binary later (or splitting further) is a half-day refactor because the actual logic lives in library crates.
 
 **Updated crate structure**:
 
 ```
-biem/
+locus/
 ├── Cargo.toml                  # workspace root
 ├── crates/
-│   ├── biem-core/              # shared types, errors
-│   ├── biem-parser/            # Parser trait + MarkdownParser
-│   ├── biem-registry/          # Registry trait + DuckDB impl
-│   ├── biem-bitmap/            # BitmapStore trait + LMDB impl
-│   ├── biem-ingest/            # IngestionPipeline
-│   ├── biem-watcher/           # SourceFeed trait + FsWatcher
-│   ├── biem-query/             # QueryEngine
-│   ├── biem-cli/               # `biem` binary
-│   └── biem-daemon/            # `biemd` binary (watcher + optional MCP/HTTP)
+│   ├── locus-core/              # shared types, errors
+│   ├── locus-parser/            # Parser trait + MarkdownParser
+│   ├── locus-registry/          # Registry trait + DuckDB impl
+│   ├── locus-bitmap/            # BitmapStore trait + LMDB impl
+│   ├── locus-ingest/            # IngestionPipeline
+│   ├── locus-watcher/           # SourceFeed trait + FsWatcher
+│   ├── locus-query/             # QueryEngine
+│   ├── locus-cli/               # `locus` binary
+│   └── locus-daemon/            # `locusd` binary (watcher + optional MCP/HTTP)
 ├── docs/
 │   └── architecture/
 └── tests/
@@ -1080,15 +1080,15 @@ biem/
 
 ```mermaid
 graph BT
-    CORE["biem-core<br/>(shared types)"]
-    PARSER["biem-parser<br/>(Parser trait + MarkdownParser)"]
-    REG["biem-registry<br/>(Registry trait + DuckDB impl)"]
-    BITMAP["biem-bitmap<br/>(BitmapStore trait + LMDB impl)"]
-    INGEST["biem-ingest<br/>(IngestionPipeline)"]
-    QUERY["biem-query<br/>(QueryEngine)"]
-    WATCH["biem-watcher<br/>(SourceFeed trait + FsWatcher)"]
-    CLI["biem-cli<br/>(biem binary)"]
-    DAEMON["biem-daemon<br/>(biemd binary)"]
+    CORE["locus-core<br/>(shared types)"]
+    PARSER["locus-parser<br/>(Parser trait + MarkdownParser)"]
+    REG["locus-registry<br/>(Registry trait + DuckDB impl)"]
+    BITMAP["locus-bitmap<br/>(BitmapStore trait + LMDB impl)"]
+    INGEST["locus-ingest<br/>(IngestionPipeline)"]
+    QUERY["locus-query<br/>(QueryEngine)"]
+    WATCH["locus-watcher<br/>(SourceFeed trait + FsWatcher)"]
+    CLI["locus-cli<br/>(locus binary)"]
+    DAEMON["locus-daemon<br/>(biemd binary)"]
 
     PARSER --> CORE
     REG --> CORE
@@ -1109,7 +1109,7 @@ graph BT
 
 ---
 
-## Semantic Layer (`biem-core/src/semantic.rs`)
+## Semantic Layer (`locus-core/src/semantic.rs`)
 
 ### Types
 
@@ -1177,7 +1177,7 @@ pub trait Reranker: Send + Sync {
 
 | Struct | Crate | Backend | Notes |
 |---|---|---|---|
-| `FastEmbedReranker` | `biem-embed` | fastembed ONNX cross-encoder | BGE-Reranker-Base default (~140MB model), local inference |
+| `FastEmbedReranker` | `locus-embed` | fastembed ONNX cross-encoder | BGE-Reranker-Base default (~140MB model), local inference |
 
 ### Key contract
 

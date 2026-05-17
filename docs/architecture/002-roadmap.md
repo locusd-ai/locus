@@ -1,4 +1,4 @@
-# BIEM Roadmap
+# Locus Roadmap
 
 > Status: **Phase 1 — Complete**
 > Reference: `001-system-overview.md` for architecture details
@@ -42,7 +42,7 @@ gantt
 #### 1. Foundation: Registry
 - [x] DuckDB schema (documents, chunks, bitmap_catalog, global_state)
 - [x] CRUD operations: assign_id, lookup, update, bulk_insert
-- [x] Config/state directory setup (`~/.biem/` global, `.biem/` local)
+- [x] Config/state directory setup (`~/.locus/` global, `.locus/` local)
 - [x] `config.toml` vault registration
 - [x] Unit tests for all CRUD ops
 
@@ -94,13 +94,13 @@ gantt
 - [x] Integration tests: full pipeline (ingest → query → verify results)
 
 #### 7. Interface: CLI
-- [x] `biem init <path> [--local]` — register vault, run initial index
-- [x] `biem config` — show/set configuration
-- [x] `biem status` — index health, document count, bitmap count
-- [x] `biem search --tag X --type Y [--op and|or]` — query with filters
-- [x] `biem inspect <file>` — show doc_id, tags, links, type, chunks
-- [x] `biem bitmaps [--category tag|folder|...]` — list bitmaps with cardinality
-- [x] `biem compact` — run tombstone cleanup
+- [x] `locus init <path> [--local]` — register vault, run initial index
+- [x] `locus config` — show/set configuration
+- [x] `locus status` — index health, document count, bitmap count
+- [x] `locus search --tag X --type Y [--op and|or]` — query with filters
+- [x] `locus inspect <file>` — show doc_id, tags, links, type, chunks
+- [x] `locus bitmaps [--category tag|folder|...]` — list bitmaps with cardinality
+- [x] `locus compact` — run tombstone cleanup
 - [x] Output formatting: table, JSON (`--json` flag)
 
 #### 8. Interface: MCP Server
@@ -126,25 +126,25 @@ gantt
 
 Pluggable tagger system that produces inferred bitmap keys from parse results, with caching.
 
-- [x] Core types: `TaggerResult`, `EnrichmentCache`, `Tagger`/`TaggerCache` traits in `biem-core`
-- [x] `biem-enrich` crate with `TagPipeline` orchestrator
+- [x] Core types: `TaggerResult`, `EnrichmentCache`, `Tagger`/`TaggerCache` traits in `locus-core`
+- [x] `locus-enrich` crate with `TagPipeline` orchestrator
 - [x] `InMemoryTaggerCache` for tests, `FsTaggerCache` for persistence
 - [x] Builtin taggers: `SizeTagger`, `ConventionTagger`, `TopicTagger`, `ComplexityTagger`
 - [x] Custom YAML tagger loader with rule-based matching
 - [x] Integration into `IngestionPipeline` (optional, backwards compatible)
-- [x] CLI: `biem taggers`, `biem enrich [--force]`, enrichment in `biem init`/`biem index`
+- [x] CLI: `locus taggers`, `locus enrich [--force]`, enrichment in `locus init`/`locus index`
 - [x] Documentation: system overview and contracts updated
 
 ### Workstream 2: Semantic Layer (Vectors) ✅
 
 Vector-based semantic search as complement to bitmap filtering. Bitmaps pre-filter, vectors rank by similarity.
 
-- [x] Core types: `EmbeddingVector`, `ScoredPointer`, `SemanticQueryRequest/Result` in `biem-core`
-- [x] Traits: `Embedder`, `VectorStore`, `Reranker` in `biem-core/src/semantic.rs`
-- [x] `biem-embed` crate with `InMemoryVectorStore`, `FastEmbedEmbedder`, `UsearchVectorStore`
+- [x] Core types: `EmbeddingVector`, `ScoredPointer`, `SemanticQueryRequest/Result` in `locus-core`
+- [x] Traits: `Embedder`, `VectorStore`, `Reranker` in `locus-core/src/semantic.rs`
+- [x] `locus-embed` crate with `InMemoryVectorStore`, `FastEmbedEmbedder`, `UsearchVectorStore`
 - [x] Embedding generation integrated into `IngestionPipeline` (optional, backwards compatible)
 - [x] `BitmapQueryEngine::semantic_query()` — bitmap pre-filter → vector `search_within`
-- [x] CLI: `biem semantic "query" --filter tag:X` command
+- [x] CLI: `locus semantic "query" --filter tag:X` command
 - [x] Documentation: system overview and contracts updated
 
 ### Remaining Phase 2 Work
@@ -200,7 +200,7 @@ Track the lineage of LLM-generated assets and session context via bitmap keys.
 Extend BIEM to index codebases using Tree-sitter. **Implemented in WS3.**
 
 ### Completed
-- [x] `biem-code` crate with `CodeParser` (Tree-sitter, `Parser` trait)
+- [x] `locus-code` crate with `CodeParser` (Tree-sitter, `Parser` trait)
 - [x] AST-aware chunking (function, method, class, module, constant, import)
 - [x] Rust grammar (tree-sitter-rust): fn, struct, enum, trait, impl, mod, use, const
 - [x] TypeScript grammar (tree-sitter-typescript): function, class, interface, type, enum, import/export
@@ -208,7 +208,7 @@ Extend BIEM to index codebases using Tree-sitter. **Implemented in WS3.**
 - [x] Code-specific bitmap keys: `lang:*`, `kind:*`, `visibility:*`, `async:true`, `import:*`
 - [x] Python decorator convention tags: `convention:fixture`, `convention:route`, etc.
 - [x] `.biemignore` support (gitignore syntax, default: `target/`, `node_modules/`, `.git/`, etc.)
-- [x] `biem init <path> --type code` for code source registration
+- [x] `locus init <path> --type code` for code source registration
 - [x] Multi-source support (Obsidian + code coexist)
 - [x] Source type inference from parse result tags
 - [x] Integration tests: bitmap queries, chunk accuracy, multi-language, throughput

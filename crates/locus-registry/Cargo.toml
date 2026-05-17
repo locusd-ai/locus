@@ -1,0 +1,15 @@
+[package]
+name = "locus-registry"
+description = "Registry trait and implementations (DuckDB first)"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+locus-core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+duckdb = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

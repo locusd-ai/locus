@@ -1,4 +1,4 @@
-# BIEM Performance Benchmarks
+# Locus Performance Benchmarks
 
 > **Generated**: 2025-05-13  
 > **Rust**: stable (edition 2021)  
@@ -6,7 +6,7 @@
 
 ## Overview
 
-BIEM (Bit-Indexed External Memory) is a local-first indexing engine that provides
+Locus is a local-first indexing engine that provides
 precise structural pointers for LLMs via bitmap pre-filtering. These benchmarks
 measure end-to-end performance and compare against every alternative approach
 you'd reasonably use.
@@ -177,7 +177,7 @@ A HashMap gives you O(1) single-key lookup (faster than BIEM for that case). But
 
 1. **AND/OR/NOT** — with HashSets you iterate per-element; Roaring does it on compressed bit blocks
 2. **Persistence** — HashMap rebuilds from scratch every restart; BIEM persists to LMDB
-3. **Structure** — HashMap returns file paths; BIEM returns chunk-level pointers with byte ranges
+3. **Structure** — HashMap returns file paths; Locus returns chunk-level pointers with byte ranges
 4. **Tombstoning** — BIEM handles deleted files via tombstone bitmaps; HashMap requires full rebuild
 
 ### Why not just use SQL?
@@ -205,7 +205,7 @@ All baselines run on the same generated vault with warmed filesystem caches.
 | **SQL** | In-memory DuckDB with `doc_tags` table + index, `SELECT ... WHERE` | Median of 100 |
 | **BIEM** | `BitmapQueryEngine::query` with Roaring Bitmap ops | Median of 100 |
 
-Build cost for HashMap/HashSet/Graph/SQL/BIEM is **excluded** from query timing — we're comparing lookup speed only. BIEM's build cost (bulk_index) is reported separately.
+Build cost for HashMap/HashSet/Graph/SQL/Locus is **excluded** from query timing — we're comparing lookup speed only. BIEM's build cost (bulk_index) is reported separately.
 
 ## Synthetic Vault Generator
 
@@ -224,10 +224,10 @@ Deterministic (seed=42) with realistic Obsidian structure:
 
 ```bash
 # Criterion benchmarks (statistical, ~5 min)
-cargo bench -p biem-ingest --bench ingest_bench
+cargo bench -p locus-ingest --bench ingest_bench
 
 # Scale test with all baselines
-cargo run --release --bin biem-scale-test -- --max-files 50000
+cargo run --release --bin locus-scale-test -- --max-files 50000
 
 # Full report generation
 ./scripts/bench-report.sh --max-files 50000

@@ -1,20 +1,20 @@
-# Task: Implement biem-query (Query Engine) ✅
+# Task: Implement locus-query (Query Engine) ✅
 
 ## Goal
 Implement the `QueryEngine` trait and `BitmapQueryEngine` struct that resolves boolean filter expressions against the bitmap store, then hydrates results with metadata from the registry. Returns pointers (not content).
 
 ## Steps
 
-### Step 1: Core types in biem-core
-- [ ] Add `Filter`, `QueryRequest`, `MatchPointer`, `ChunkPointer`, `QueryResult`, `QueryError` to biem-core
+### Step 1: Core types in locus-core
+- [ ] Add `Filter`, `QueryRequest`, `MatchPointer`, `ChunkPointer`, `QueryResult`, `QueryError` to locus-core
 - [ ] Add `QueryEngine` trait
-- [ ] Wire up in biem-core lib.rs
-- **Validate**: `cargo check -p biem-core`
+- [ ] Wire up in locus-core lib.rs
+- **Validate**: `cargo check -p locus-core`
 
 ### Step 2: BitmapQueryEngine struct and constructor
 - [ ] Define `BitmapQueryEngine` holding `&dyn BitmapStore` + `&dyn Registry` (or Box)
 - [ ] Implement `fn new(bitmap_store, registry) -> Self`
-- **Validate**: `cargo check -p biem-query`
+- **Validate**: `cargo check -p locus-query`
 
 ### Step 3: Filter resolution (recursive bitmap ops)
 - [ ] `fn resolve_filter(&self, filter: &Filter) -> Result<RoaringBitmap, QueryError>`
@@ -22,7 +22,7 @@ Implement the `QueryEngine` trait and `BitmapQueryEngine` struct that resolves b
 - [ ] Not → get full universe, andnot resolved inner
 - [ ] And → intersect all children
 - [ ] Or → union all children
-- **Validate**: `cargo check -p biem-query`
+- **Validate**: `cargo check -p locus-query`
 
 ### Step 4: Query execution and result hydration
 - [ ] Resolve filter → get matching doc_ids
@@ -30,11 +30,11 @@ Implement the `QueryEngine` trait and `BitmapQueryEngine` struct that resolves b
 - [ ] Lookup docs from registry, get chunks
 - [ ] Build MatchPointer + ChunkPointer for each doc
 - [ ] Measure query_time_us
-- **Validate**: `cargo check -p biem-query`
+- **Validate**: `cargo check -p locus-query`
 
 ### Step 5: list_filters implementation
 - [ ] Delegate to registry.list_catalog(category)
-- **Validate**: `cargo check -p biem-query`
+- **Validate**: `cargo check -p locus-query`
 
 ### Step 6: Unit tests (in-memory backends)
 - [ ] Single key filter
@@ -46,7 +46,7 @@ Implement the `QueryEngine` trait and `BitmapQueryEngine` struct that resolves b
 - [ ] Limit and offset
 - [ ] Unknown filter key
 - [ ] list_filters
-- **Validate**: `cargo test -p biem-query`
+- **Validate**: `cargo test -p locus-query`
 
 ### Step 7: Review against contracts
 - [ ] Verify against 003-contracts.md §7

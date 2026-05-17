@@ -1,4 +1,4 @@
-# BIEM System Architecture — Overview
+# Locus System Architecture — Overview
 
 > Status: **Phase 2 — Code intelligence implemented (Rust, TypeScript, Python)**
 > Scope: Obsidian vault + codebase indexing, designed for extensibility to confluence/other sources
@@ -11,14 +11,14 @@
 | Q1 | **Parser is a separate module** — decoupled from ingestion so different parsers (markdown, code, etc.) can plug into the same ingestion pipeline |
 | Q2 | **Chunking is flexible** — the registry stores chunk metadata with a configurable granularity strategy per source type |
 | Q3 | **Tombstone bitmap for deletes** — lazy cleanup, most scalable. File moves update the registry path + folder bitmaps, same ID retained |
-| Q4 | **BIEM returns metadata pointers, not content** — the LLM decides what to read. Multiple interface modes (MCP, HTTP API, CLI). See §6 for exploration |
+| Q4 | **Locus returns metadata pointers, not content** — the LLM decides what to read. Multiple interface modes (MCP, HTTP API, CLI). See §6 for exploration |
 | Q5 | **Semantic layer (Qdrant/vector/reranker) is a follow-on phase** — contracts designed to accommodate it |
 
 ---
 
 ## 1. High-Level System Boundary (Revised)
 
-BIEM is a **local indexing and filtering service**. It does not retrieve content — it tells you *where* the relevant content is and *why* it matched, then the consumer decides what to read.
+Locus is a **local indexing and filtering service**. It does not retrieve content — it tells you *where* the relevant content is and *why* it matched, then the consumer decides what to read.
 
 **Core goal: minimise context pollution.** LLMs degrade when given irrelevant context. BIEM's job is to ensure only the most structurally relevant pointers reach the model — not "here are 50 similar notes", but "here are the 3 notes that are tagged #work, typed as tasks, and linked to your current project". The bitmap pre-filter eliminates noise *before* any semantic or LLM processing, so the model's limited context window is spent on signal, not noise.
 
@@ -30,7 +30,7 @@ graph LR
         OTHER[("Confluence, etc.<br/>(future)")]
     end
 
-    subgraph BIEM["BIEM Service"]
+    subgraph BIEM["Locus Service"]
         IDX["Index Engine"]
         QE["Query Engine"]
     end
@@ -51,7 +51,7 @@ graph LR
     QE -- "pointers + metadata" --> Consumers
 ```
 
-Key shift from v1: BIEM is a **pointer service**. It returns structured metadata (file path, chunk range, tags, type, match reason) — not the content itself.
+Key shift from v1: Locus is a **pointer service**. It returns structured metadata (file path, chunk range, tags, type, match reason) — not the content itself.
 
 ---
 
@@ -61,7 +61,7 @@ Eight modules, with clear separation between parsing, enrichment, and ingestion:
 
 ```mermaid
 graph TB
-    subgraph BIEM["BIEM Service"]
+    subgraph BIEM["Locus Service"]
         direction TB
 
         WATCH["Watcher<br/>─────────<br/>fs events → change queue"]
@@ -291,7 +291,7 @@ graph TB
 |------|----------|-----|
 | **MCP** | AI agent calls `biem_search` as a tool | Primary AI integration. Agent gets pointers, decides what to read. |
 | **HTTP API** | Obsidian plugin, VS Code extension, scripts | Non-MCP integrations. Could power a sidebar showing "related notes by bitmap". |
-| **CLI** | `biem search --tag work --type task` | Debugging, shell pipelines, demos. Essential for development. |
+| **CLI** | `locus search --tag work --type task` | Debugging, shell pipelines, demos. Essential for development. |
 
 ### Response payload (all modes return the same core data)
 
@@ -339,7 +339,7 @@ The cardinality sort is the key optimisation: if `type:task` has 12 entries and 
 | Q1 | **Yes — SourceFeed trait** with filesystem watcher as the first implementation |
 | Q2 | **Single-threaded sequential for Phase 1** — concurrency is a roadmap item (see `002-roadmap.md`) |
 | Q3 | **CLI design approved** — first pass as shown below |
-| Q4 | **Configurable via `biem config`** — supports `~/.biem/` (global) and `.biem/` (local/co-located). See §8.1 |
+| Q4 | **Configurable via `locus config`** — supports `~/.locus/` (global) and `.locus/` (local/co-located). See §8.1 |
 | Q5 | **Needs further exploration** — see §8.2 |
 
 ### 8.1 Configuration & State Directory
@@ -347,7 +347,7 @@ The cardinality sort is the key optimisation: if `type:task` has 12 entries and 
 BIEM uses a two-tier config model:
 
 ```
-~/.biem/                          # Global config
+~/.locus/                          # Global config
   config.toml                     # Default settings, registered vaults
   vaults/
     <vault-hash>/                 # Per-vault state (default location)
@@ -355,24 +355,24 @@ BIEM uses a two-tier config model:
       bitmaps.lmdb/
       index.lock
 
-<vault-path>/.biem/               # Local state (opt-in via biem config)
+<vault-path>/.locus/               # Local state (opt-in via locus config)
   registry.duckdb
   bitmaps.lmdb/
   index.lock
 ```
 
-The `biem config` command controls this:
+The `locus config` command controls this:
 ```
-biem config                       # show current config
-biem config --storage local       # store state inside the vault (.biem/)
-biem config --storage global      # store state in ~/.biem/vaults/<hash>/
+locus config                       # show current config
+locus config --storage local       # store state inside the vault (.locus/)
+locus config --storage global      # store state in ~/.locus/vaults/<hash>/
 ```
 
-**Default is global** (`~/.biem/`) — keeps the vault clean, avoids polluting git/sync. Local is available for portability or when the vault and index should travel together.
+**Default is global** (`~/.locus/`) — keeps the vault clean, avoids polluting git/sync. Local is available for portability or when the vault and index should travel together.
 
 The global config tracks registered vaults:
 ```toml
-# ~/.biem/config.toml
+# ~/.locus/config.toml
 [vaults.my-notes]
 path = "/Users/me/Documents/Obsidian"
 storage = "global"  # or "local"
@@ -386,8 +386,8 @@ source_type = "obsidian"
 
 CLI flow:
 ```
-biem init /path/to/vault          # registers vault, creates state dir
-biem init /path/to/vault --local  # same but stores state inside vault
+locus init /path/to/vault          # registers vault, creates state dir
+locus init /path/to/vault --local  # same but stores state inside vault
 ```
 
 ### 8.2 Initial Indexing vs Incremental — Exploration
@@ -396,7 +396,7 @@ There are two fundamentally different ingestion scenarios:
 
 **Incremental** (steady state): A file changes → watcher fires → parse one file → update stores. Simple, well-understood.
 
-**Initial** (`biem init` on a 10k+ note vault): Walk the entire directory tree, parse everything, populate the registry and bitmap store from scratch.
+**Initial** (`locus init` on a 10k+ note vault): Walk the entire directory tree, parse everything, populate the registry and bitmap store from scratch.
 
 The challenge with initial indexing is **write amplification**:
 - Each file produces 1 registry insert + N bitmap updates
@@ -424,7 +424,7 @@ After initial indexing completes, the watcher starts and all subsequent changes 
 
 | Aspect | Initial (batch) | Incremental (per-file) |
 |--------|-----------------|----------------------|
-| Trigger | `biem init` | Watcher event |
+| Trigger | `locus init` | Watcher event |
 | Parse | All files, sequential | Single file |
 | Registry writes | Bulk INSERT (one txn) | Single INSERT/UPDATE |
 | Bitmap writes | Build from scratch, serialize once | Deserialize → mutate → serialize |

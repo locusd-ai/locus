@@ -1,8 +1,8 @@
-# BIEM — Copilot Instructions
+# Locus — Copilot Instructions
 
 ## Project overview
 
-BIEM (Bit-Indexed External Memory) is a local-first indexing and retrieval engine. Core goal: **minimise context pollution for LLMs** by returning precise structural pointers (not content) via bitmap pre-filtering.
+Locus is a local-first indexing and retrieval engine. Core goal: **minimise context pollution for LLMs** by returning precise structural pointers (not content) via bitmap pre-filtering.
 
 - Language: **Rust**
 - Architecture docs: `docs/architecture/001-system-overview.md`, `002-roadmap.md`, `003-contracts.md`
@@ -10,8 +10,8 @@ BIEM (Bit-Indexed External Memory) is a local-first indexing and retrieval engin
 
 ## Architecture at a glance
 
-- **Two binaries**: `biem` (CLI) and `biemd` (daemon with watcher/ingestion + optional MCP/HTTP)
-- **9 crates**: `biem-core`, `biem-parser`, `biem-registry`, `biem-bitmap`, `biem-ingest`, `biem-watcher`, `biem-query`, `biem-cli`, `biem-daemon`
+- **Two binaries**: `locus` (CLI) and `locusd` (daemon with watcher/ingestion + optional MCP/HTTP)
+- **9 crates**: `locus-core`, `locus-parser`, `locus-registry`, `locus-bitmap`, `locus-ingest`, `locus-watcher`, `locus-query`, `locus-cli`, `locus-daemon`
 - **Trait objects** (`Box<dyn Trait>`) for pluggability — not generics
 - **Sync core**, async only at interface boundary (tokio for MCP/HTTP, `spawn_blocking` into sync)
 - **Registry** is pluggable (DuckDB first). **BitmapStore** is pluggable (LMDB/heed first, in-memory for tests)
@@ -67,6 +67,6 @@ BIEM (Bit-Indexed External Memory) is a local-first indexing and retrieval engin
 ### What not to do
 - Don't use generics for trait boundaries in v1 (trait objects instead)
 - Don't wrap sync storage in async — use `spawn_blocking` at the boundary
-- Don't store BIEM state inside the vault by default (global `~/.biem/` is default)
-- Don't put content in query responses — BIEM returns pointers, not content
+- Don't store BIEM state inside the vault by default (global `~/.locus/` is default)
+- Don't put content in query responses — Locus returns pointers, not content
 - Don't use `u64` for IDs

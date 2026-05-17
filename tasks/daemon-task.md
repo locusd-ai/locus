@@ -1,7 +1,7 @@
-# Task: Implement biem-daemon (Daemon Binary) ✅
+# Task: Implement locus-daemon (Daemon Binary) ✅
 
 ## Goal
-Implement the `biemd` daemon binary with three modes: watcher + ingestion loop, MCP server (stdio), and HTTP API server. All query operations delegate to `dyn QueryEngine`. Supports `--mcp`, `--http`, or both together.
+Implement the `locusd` daemon binary with three modes: watcher + ingestion loop, MCP server (stdio), and HTTP API server. All query operations delegate to `dyn QueryEngine`. Supports `--mcp`, `--http`, or both together.
 
 ## Steps
 
@@ -9,7 +9,7 @@ Implement the `biemd` daemon binary with three modes: watcher + ingestion loop, 
 - [x] Define `Cli` struct with vault path, `--data-dir`, `--memory`, `--debounce-ms`
 - [x] Set up tokio runtime, tracing subscriber
 - [x] Build persistent or in-memory stores based on flags
-- **Validate**: `cargo check -p biem-daemon`
+- **Validate**: `cargo check -p locus-daemon`
 
 ### Step 2: Watcher + ingestion event loop
 - [x] Construct `FsWatcher` + `IngestionPipeline`
@@ -17,7 +17,7 @@ Implement the `biemd` daemon binary with three modes: watcher + ingestion loop, 
 - [x] Spawn watcher on blocking thread, pipe `ChangeEvent` via channel
 - [x] Spawn ingestion loop on blocking thread
 - [x] Graceful shutdown on Ctrl+C via `StopHandle`
-- **Validate**: `cargo run -p biem-daemon -- <vault>`
+- **Validate**: `cargo run -p locus-daemon -- <vault>`
 
 ### Step 3: MCP server (`--mcp`)
 - [x] Implement `BiemMcpServer` with `Arc<dyn QueryEngine>`
@@ -25,7 +25,7 @@ Implement the `biemd` daemon binary with three modes: watcher + ingestion loop, 
 - [x] Uses rmcp `tool_router` + `tool_handler` + `Parameters<T>` wrapper
 - [x] Runs over stdio transport
 - [x] 9 unit tests
-- **Validate**: `cargo test -p biem-daemon`
+- **Validate**: `cargo test -p locus-daemon`
 
 ### Step 4: HTTP API server (`--http`)
 - [x] Implement axum router with 4 endpoints:
@@ -37,7 +37,7 @@ Implement the `biemd` daemon binary with three modes: watcher + ingestion loop, 
 - [x] Error handling: `QueryError` → 500, not found → 404
 - [x] `--port` flag (default 3141)
 - [x] 7 integration tests using axum oneshot
-- **Validate**: `cargo test -p biem-daemon`
+- **Validate**: `cargo test -p locus-daemon`
 
 ### Step 5: Combined modes
 - [x] `--http` only: block on HTTP server

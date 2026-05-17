@@ -1,18 +1,18 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/biem-core",
-    "crates/biem-parser",
-    "crates/biem-registry",
-    "crates/biem-bitmap",
-    "crates/biem-ingest",
-    "crates/biem-watcher",
-    "crates/biem-query",
-    "crates/biem-cli",
-    "crates/biem-daemon",
-    "crates/biem-enrich",
-    "crates/biem-embed",
-    "crates/biem-code",
+    "crates/locus-core",
+    "crates/locus-parser",
+    "crates/locus-registry",
+    "crates/locus-bitmap",
+    "crates/locus-ingest",
+    "crates/locus-watcher",
+    "crates/locus-query",
+    "crates/locus-cli",
+    "crates/locus-daemon",
+    "crates/locus-enrich",
+    "crates/locus-embed",
+    "crates/locus-code",
 ]
 
 [workspace.package]
@@ -23,16 +23,16 @@ rust-version = "1.75"
 
 [workspace.dependencies]
 # Internal crates
-biem-core = { path = "crates/biem-core" }
-biem-parser = { path = "crates/biem-parser" }
-biem-registry = { path = "crates/biem-registry" }
-biem-bitmap = { path = "crates/biem-bitmap" }
-biem-ingest = { path = "crates/biem-ingest" }
-biem-watcher = { path = "crates/biem-watcher" }
-biem-query = { path = "crates/biem-query" }
-biem-enrich = { path = "crates/biem-enrich" }
-biem-embed = { path = "crates/biem-embed" }
-biem-code = { path = "crates/biem-code" }
+locus-core = { path = "crates/locus-core" }
+locus-parser = { path = "crates/locus-parser" }
+locus-registry = { path = "crates/locus-registry" }
+locus-bitmap = { path = "crates/locus-bitmap" }
+locus-ingest = { path = "crates/locus-ingest" }
+locus-watcher = { path = "crates/locus-watcher" }
+locus-query = { path = "crates/locus-query" }
+locus-enrich = { path = "crates/locus-enrich" }
+locus-embed = { path = "crates/locus-embed" }
+locus-code = { path = "crates/locus-code" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

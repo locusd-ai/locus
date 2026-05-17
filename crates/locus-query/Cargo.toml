@@ -1,0 +1,24 @@
+[package]
+name = "locus-query"
+description = "Query engine — bitmap intersection, filter resolution, metadata assembly"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+locus-core = { workspace = true }
+locus-registry = { workspace = true }
+locus-bitmap = { workspace = true }
+roaring = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+locus-parser = { workspace = true }
+locus-ingest = { workspace = true }
+locus-embed = { workspace = true }
+tempfile = "3"
+roaring = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
