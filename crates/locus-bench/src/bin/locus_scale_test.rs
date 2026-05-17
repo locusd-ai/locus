@@ -1,4 +1,4 @@
-//! Scale test — measures BIEM performance at large vault sizes.
+//! Scale test — measures Locus performance at large vault sizes.
 //!
 //! Outputs JSON results to stdout for the report generator.
 //! Usage: cargo run --release --bin locus-scale-test [-- --max-files 100000] [--skip-slow]
@@ -9,7 +9,7 @@ use std::time::Instant;
 use locus_bitmap::memory::InMemoryBitmapStore;
 use locus_core::parser::Parser;
 use locus_core::query::{Filter, QueryEngine, QueryRequest};
-use locus_ingest::vault_gen::{generate_vault, vault_size_bytes, VaultConfig};
+use locus_bench::vault_gen::{generate_vault, vault_size_bytes, VaultConfig};
 use locus_ingest::IngestionPipeline;
 use locus_parser::markdown::MarkdownParser;
 use locus_query::BitmapQueryEngine;
@@ -541,7 +541,7 @@ fn main() {
         .filter(|&n| n <= max_files)
         .collect();
 
-    eprintln!("BIEM Scale Test — testing {} sizes up to {max_files}{}", scales.len(),
+    eprintln!("Locus Scale Test — testing {} sizes up to {max_files}{}", scales.len(),
         if skip_slow { " (skipping slow baselines)" } else { "" });
     eprintln!();
 

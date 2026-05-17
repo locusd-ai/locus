@@ -13,6 +13,7 @@ members = [
     "crates/locus-enrich",
     "crates/locus-embed",
     "crates/locus-code",
+    "crates/locus-bench",
 ]
 
 [workspace.package]
@@ -33,6 +34,7 @@ locus-query = { path = "crates/locus-query" }
 locus-enrich = { path = "crates/locus-enrich" }
 locus-embed = { path = "crates/locus-embed" }
 locus-code = { path = "crates/locus-code" }
+locus-bench = { path = "crates/locus-bench" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

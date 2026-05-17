@@ -2,7 +2,6 @@
 //!
 //! Usage: cargo run --release --bin locus-bench-phase2
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
@@ -16,7 +15,7 @@ use locus_core::types::SourceType;
 use locus_embed::InMemoryVectorStore;
 use locus_enrich::builtin::{ComplexityTagger, ConventionTagger, SizeTagger, TopicTagger};
 use locus_enrich::{InMemoryTaggerCache, TagPipeline};
-use locus_ingest::vault_gen::{generate_vault, VaultConfig};
+use locus_bench::vault_gen::{generate_vault, VaultConfig};
 use locus_ingest::IngestionPipeline;
 use locus_parser::markdown::MarkdownParser;
 use locus_query::{BitmapQueryEngine, SemanticQueryRequest};

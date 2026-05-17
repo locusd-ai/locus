@@ -2455,6 +2455,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "locus-bench"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "duckdb",
+ "ignore",
+ "locus-bitmap",
+ "locus-code",
+ "locus-core",
+ "locus-embed",
+ "locus-enrich",
+ "locus-ingest",
+ "locus-parser",
+ "locus-query",
+ "locus-registry",
+ "petgraph",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "locus-bitmap"
 version = "0.1.0"
 dependencies = [
@@ -2570,21 +2594,17 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "criterion",
- "duckdb",
  "ignore",
  "locus-bitmap",
  "locus-code",
  "locus-core",
- "locus-embed",
  "locus-enrich",
  "locus-parser",
  "locus-query",
  "locus-registry",
- "petgraph",
  "rand 0.8.6",
  "roaring",
  "serde",
- "serde_json",
  "tempfile",
  "thiserror",
  "tracing",

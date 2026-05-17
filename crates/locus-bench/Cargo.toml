@@ -1,0 +1,33 @@
+[package]
+name = "locus-bench"
+description = "Benchmarks and scale tests for the Locus pipeline"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+locus-core = { workspace = true }
+locus-ingest = { workspace = true }
+locus-parser = { workspace = true }
+locus-registry = { workspace = true }
+locus-bitmap = { workspace = true }
+locus-query = { workspace = true }
+locus-enrich = { workspace = true }
+locus-code = { workspace = true }
+locus-embed = { workspace = true }
+blake3 = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"
+duckdb = { workspace = true }
+petgraph = "0.7"
+ignore = "0.4"
+tracing = { workspace = true }
+
+[[bin]]
+name = "locus-scale-test"
+path = "src/bin/locus_scale_test.rs"
+
+[[bin]]
+name = "locus-bench-phase2"
+path = "src/bin/locus_bench_phase2.rs"
