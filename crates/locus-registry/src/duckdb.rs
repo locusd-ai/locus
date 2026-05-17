@@ -111,29 +111,32 @@ impl DuckDbRegistry {
         Ok(id)
     }
 
-    fn source_type_to_str(st: &SourceType) -> &'static str {
+    fn source_type_to_str(st: &SourceType) -> String {
         match st {
-            SourceType::Obsidian => "obsidian",
-            SourceType::Code => "code",
+            SourceType::Obsidian => "obsidian".to_string(),
+            SourceType::Code => "code".to_string(),
+            SourceType::Custom(s) => s.clone(),
         }
     }
 
     fn str_to_source_type(s: &str) -> SourceType {
         match s {
+            "obsidian" => SourceType::Obsidian,
             "code" => SourceType::Code,
-            _ => SourceType::Obsidian,
+            other => SourceType::Custom(other.to_string()),
         }
     }
 
-    fn doc_type_to_str(nt: &DocType) -> &'static str {
+    fn doc_type_to_str(nt: &DocType) -> String {
         match nt {
-            DocType::Note => "note",
-            DocType::Task => "task",
-            DocType::Moc => "moc",
-            DocType::Reference => "reference",
-            DocType::SourceFile => "source_file",
-            DocType::TestFile => "test_file",
-            DocType::ConfigFile => "config_file",
+            DocType::Note => "note".to_string(),
+            DocType::Task => "task".to_string(),
+            DocType::Moc => "moc".to_string(),
+            DocType::Reference => "reference".to_string(),
+            DocType::SourceFile => "source_file".to_string(),
+            DocType::TestFile => "test_file".to_string(),
+            DocType::ConfigFile => "config_file".to_string(),
+            DocType::Custom(s) => s.clone(),
         }
     }
 
@@ -146,7 +149,7 @@ impl DuckDbRegistry {
             "source_file" => Some(DocType::SourceFile),
             "test_file" => Some(DocType::TestFile),
             "config_file" => Some(DocType::ConfigFile),
-            _ => None,
+            other => Some(DocType::Custom(other.to_string())),
         }
     }
 

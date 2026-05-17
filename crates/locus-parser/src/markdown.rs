@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn frontmatter_comma_separated_tags() {
-        let content = "---\ntags: work, rust, biem\n---\n";
+        let content = "---\ntags: work, rust, locus\n---\n";
         let (_, tags, _) = extract_frontmatter(content).unwrap();
         assert_eq!(tags, vec!["work", "rust", "locus"]);
     }

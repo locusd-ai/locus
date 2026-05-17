@@ -238,6 +238,7 @@ fn parsers_for_source(source_type: &SourceType) -> Vec<Box<dyn locus_core::parse
     match source_type {
         SourceType::Obsidian => vec![Box::new(MarkdownParser)],
         SourceType::Code => vec![Box::new(CodeParser::new())],
+        SourceType::Custom(_) => vec![Box::new(MarkdownParser)],
     }
 }
 
@@ -248,7 +249,7 @@ fn cmd_init(path: &PathBuf, local: bool, source_type_str: &str) -> Result<()> {
     let source_type = match source_type_str {
         "obsidian" => SourceType::Obsidian,
         "code" => SourceType::Code,
-        other => anyhow::bail!("unknown source type '{}' — use 'obsidian' or 'code'", other),
+        other => SourceType::Custom(other.to_string()),
     };
 
     let locus_dir = config::default_config_dir()

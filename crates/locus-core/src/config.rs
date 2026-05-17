@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::types::SourceType;
 
@@ -49,13 +49,34 @@ pub struct SourceEntry {
     pub data_dir: PathBuf,
 }
 
-/// Source type for config serialization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+/// Source type for config serialization. Serializes as a plain string in TOML.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SourceTypeConfig {
     #[default]
     Obsidian,
     Code,
+    Custom(String),
+}
+
+impl Serialize for SourceTypeConfig {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            Self::Obsidian => "obsidian",
+            Self::Code => "code",
+            Self::Custom(s) => s.as_str(),
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceTypeConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "obsidian" => Self::Obsidian,
+            "code" => Self::Code,
+            other => Self::Custom(other.to_string()),
+        })
+    }
 }
 
 impl From<SourceTypeConfig> for SourceType {
@@ -63,6 +84,7 @@ impl From<SourceTypeConfig> for SourceType {
         match c {
             SourceTypeConfig::Obsidian => SourceType::Obsidian,
             SourceTypeConfig::Code => SourceType::Code,
+            SourceTypeConfig::Custom(s) => SourceType::Custom(s),
         }
     }
 }
@@ -72,6 +94,7 @@ impl From<SourceType> for SourceTypeConfig {
         match s {
             SourceType::Obsidian => SourceTypeConfig::Obsidian,
             SourceType::Code => SourceTypeConfig::Code,
+            SourceType::Custom(s) => SourceTypeConfig::Custom(s),
         }
     }
 }

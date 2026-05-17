@@ -168,6 +168,7 @@ impl IngestionPipeline {
             DocType::SourceFile => "source_file",
             DocType::TestFile => "test_file",
             DocType::ConfigFile => "config_file",
+            DocType::Custom(s) => return format!("type:{s}"),
         };
         format!("type:{label}")
     }
@@ -176,13 +177,24 @@ impl IngestionPipeline {
         let label = match source_type {
             SourceType::Obsidian => "obsidian",
             SourceType::Code => "code",
+            SourceType::Custom(s) => return format!("source:{s}"),
         };
         format!("source:{label}")
     }
 
     /// Infer the source type from parse result tags.
-    /// If any tag starts with "lang:", this is a code file; otherwise Obsidian.
+    ///
+    /// Parsers signal their source type by emitting a `source:<name>` tag in `ParseResult.tags`.
+    /// Falls back to a `lang:` heuristic for code, then defaults to Obsidian.
     fn infer_source_type(result: &ParseResult) -> SourceType {
+        if let Some(tag) = result.tags.iter().find(|t| t.starts_with("source:")) {
+            let name = tag.strip_prefix("source:").unwrap_or("unknown");
+            return match name {
+                "obsidian" => SourceType::Obsidian,
+                "code" => SourceType::Code,
+                other => SourceType::Custom(other.to_string()),
+            };
+        }
         if result.tags.iter().any(|t| t.starts_with("lang:")) {
             SourceType::Code
         } else {

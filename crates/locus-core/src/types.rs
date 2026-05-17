@@ -22,7 +22,8 @@ pub type Timestamp = i64;
 pub enum SourceType {
     Obsidian,
     Code,
-    // Future: Confluence, etc.
+    /// A third-party or plugin-defined source. The string is used as the `source:` bitmap key.
+    Custom(String),
 }
 
 /// Auto-detected document type based on structural analysis.
@@ -43,6 +44,8 @@ pub enum DocType {
     TestFile,
     /// A configuration file.
     ConfigFile,
+    /// A third-party or plugin-defined document type. The string is used as the `type:` bitmap key.
+    Custom(String),
 }
 
 /// The category of a bitmap key, for catalog queries.
