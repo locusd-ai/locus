@@ -1,9 +1,9 @@
 # Locus Module Contracts
 
-> Status: **Phase 1 — implemented and aligned with code**
+> Status: **Phase 1 implemented and aligned with code; Phase 4 (graph layer) contracts documented**
 > Reference: `001-system-overview.md` for architecture context
 > Language: Rust
-> Scope: Phase 1 — Obsidian core only
+> Scope: Phase 1 (Obsidian core) through Phase 4 (graph layer design)
 
 This document defines the Rust types and trait signatures at every module boundary. These are the **contracts** — the stable interfaces that modules depend on. Internal implementation details are not covered here.
 
@@ -1184,3 +1184,395 @@ pub trait Reranker: Send + Sync {
 **Bitmap filter is mandatory for semantic queries.** There is no "search everything" mode — vector search is always scoped to bitmap-pre-filtered candidates. This keeps vector search fast and focused.
 
 **Reranking is optional.** When `SemanticQueryRequest.rerank = true` and a `Reranker` is provided, the query engine reads chunk content from source files and re-scores via cross-encoder. Chunk text is resolved from disk using registry metadata (doc path + byte offsets).
+
+---
+
+## Graph Layer (`locus-core/src/graph.rs` — Phase 4, planned)
+
+The graph layer is the third retrieval pillar, sitting between bitmap pre-filtering and vector reranking. All types and traits below are specified but not yet implemented. See `008-graph-layer.md` for the full design.
+
+### Shared types — `locus-core`
+
+```rust
+//! Graph layer types and traits — typed adjacency, traversal, centrality.
+
+use std::collections::HashMap;
+
+use roaring::RoaringBitmap;
+
+use crate::types::{BitmapKey, DocId, Timestamp};
+
+// ── Edge model ───────────────────────────────────────────────────
+
+/// The category of an edge — coarse-grained, source-agnostic.
+/// Always five values; new edge subtypes get a new `kind` string,
+/// not a new category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum EdgeCategory {
+    Reference,
+    Dependency,
+    Hierarchy,
+    Workflow,
+    Provenance,
+}
+
+/// A typed directed edge between two documents.
+/// `kind` is a short string of the form `"<category>:<subtype>"`,
+/// e.g. `"ref:wikilink"`, `"dep:import"`, `"flow:blocks"`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Edge {
+    pub from: DocId,
+    pub to: DocId,
+    pub category: EdgeCategory,
+    pub kind: String,
+    /// Default 1.0. Used by weighted centrality / PageRank.
+    pub weight: f32,
+    /// Optional source-specific opaque payload (e.g. byte offset of the link).
+    pub byte_offset: Option<u32>,
+    pub created_at: Timestamp,
+}
+
+/// An edge whose target was not resolvable at ingestion time.
+/// Stored verbatim so it can be resolved later (forward references,
+/// links to not-yet-created docs).
+#[derive(Debug, Clone)]
+pub struct UnresolvedEdge {
+    pub from: DocId,
+    pub category: EdgeCategory,
+    pub kind: String,
+    /// The unresolved target — typically the wikilink target string,
+    /// import path, etc.
+    pub target_ref: String,
+    pub byte_offset: Option<u32>,
+}
+
+// ── Traversal specs ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Outgoing,   // follow edges from → to
+    Incoming,   // follow edges to → from (i.e. backlinks)
+    Both,
+}
+
+/// Filter applied to edges during traversal.
+#[derive(Debug, Clone)]
+pub enum EdgeFilter {
+    /// All edges, any category.
+    Any,
+    /// Edges of a specific category (e.g. all `Reference` edges).
+    Category(EdgeCategory),
+    /// Edges whose `kind` exactly matches one of these.
+    Kinds(Vec<String>),
+    /// Boolean OR of multiple filters.
+    Or(Vec<EdgeFilter>),
+}
+
+/// Specification for a multi-hop expansion.
+#[derive(Debug, Clone)]
+pub struct ExpandSpec {
+    pub hops: u8,
+    pub direction: Direction,
+    pub edge_filter: EdgeFilter,
+    /// Hard cap on the number of nodes the expansion may add.
+    /// Prevents pathological blow-ups (e.g. expanding from a hub).
+    pub max_nodes: Option<u32>,
+    /// If true, the seed set is included in the output.
+    /// If false, only the expansion frontier is returned.
+    pub include_seeds: bool,
+}
+
+// ── Query request / response ─────────────────────────────────────
+
+/// A pure graph query — no bitmap filter, no vector rerank.
+/// Used for backlinks, forward links, centrality, shortest path.
+#[derive(Debug, Clone)]
+pub struct GraphQueryRequest {
+    pub op: GraphOp,
+    pub edge_filter: EdgeFilter,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub enum GraphOp {
+    /// Neighbours one hop away.
+    Neighbours { from: DocId, direction: Direction },
+    /// Multi-hop expansion from a seed set.
+    Expand { seeds: Vec<DocId>, spec: ExpandSpec },
+    /// Shortest path between two docs.
+    ShortestPath { from: DocId, to: DocId },
+    /// Top-k docs by centrality, optionally restricted to a candidate set.
+    TopCentral { algorithm: CentralityAlgorithm, restrict_to: Option<Vec<DocId>>, k: u32 },
+    /// All docs reachable from a seed (used by provenance / impact analysis).
+    Reachable { from: DocId, direction: Direction },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CentralityAlgorithm {
+    InDegree,
+    OutDegree,
+    PageRank { iterations: u16, damping: f32 },
+}
+
+/// Result of a graph query.
+#[derive(Debug, serde::Serialize)]
+pub struct GraphQueryResult {
+    pub nodes: Vec<GraphNodeRef>,
+    pub edges: Vec<EdgeRef>,
+    pub elapsed_us: u64,
+}
+
+/// A node in a graph result. Mirrors `MatchPointer` shape so MCP
+/// consumers handle it uniformly.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphNodeRef {
+    pub doc_id: DocId,
+    pub file_path: std::path::PathBuf,
+    pub source_type: String,
+    pub label: Option<String>,
+    /// For centrality queries, the score. Otherwise None.
+    pub score: Option<f32>,
+    /// For expansion queries, the hop distance from the seed set.
+    pub hop_distance: Option<u8>,
+}
+
+/// An edge in a graph result.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EdgeRef {
+    pub from: DocId,
+    pub to: DocId,
+    pub kind: String,
+    pub weight: f32,
+}
+
+// ── Errors ───────────────────────────────────────────────────────
+
+#[derive(Debug, thiserror::Error)]
+pub enum GraphError {
+    #[error("graph storage error: {0}")]
+    Storage(String),
+    #[error("doc not in graph: {0}")]
+    NotFound(DocId),
+    #[error("expansion exceeded max_nodes cap of {0}")]
+    ExpansionLimit(u32),
+    #[error("no path found between {0} and {1}")]
+    NoPath(DocId, DocId),
+    #[error(transparent)]
+    Bitmap(#[from] crate::bitmap::BitmapError),
+    #[error(transparent)]
+    Registry(#[from] crate::registry::RegistryError),
+}
+```
+
+### `GraphStats` — `locus-core`
+
+```rust
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphStats {
+    pub node_count: u64,
+    pub edge_count: u64,
+    pub edges_by_category: HashMap<String, u64>,
+    pub in_memory_bytes: u64,
+    pub last_rebuilt: Timestamp,
+}
+```
+
+### `GraphStore` trait — `locus-registry`
+
+Persistent storage for the document link graph. Backed by DuckDB tables (`doc_links` and `doc_links_pending`). Holds an in-memory `petgraph::StableGraph` rebuilt at daemon startup; mutations write through to both DuckDB and the in-memory graph.
+
+```rust
+/// Persistent storage for the document link graph.
+pub trait GraphStore: Send + Sync {
+    // ── Edge writes (called by ingestion) ──────────────────────
+
+    /// Insert a fully-resolved edge.
+    fn insert_edge(&mut self, edge: Edge) -> Result<(), GraphError>;
+
+    /// Bulk insert edges in a single transaction. Used by initial indexing.
+    fn bulk_insert_edges(&mut self, edges: Vec<Edge>) -> Result<(), GraphError>;
+
+    /// Insert an unresolved edge (target not yet in registry).
+    /// On every subsequent doc insert, ingestion calls `resolve_pending`.
+    fn insert_unresolved(&mut self, edge: UnresolvedEdge) -> Result<(), GraphError>;
+
+    /// Try to resolve any pending edges that point at the given doc.
+    /// Returns the number of edges promoted from unresolved to resolved.
+    fn resolve_pending(&mut self, doc_id: DocId, link_target: &str) -> Result<u32, GraphError>;
+
+    /// Remove all edges where `from` or `to` equals `doc_id`.
+    /// Called when a doc is tombstoned.
+    fn remove_doc_edges(&mut self, doc_id: DocId) -> Result<u32, GraphError>;
+
+    /// Replace all outgoing edges for a doc (used on doc re-index).
+    fn replace_outgoing(&mut self, doc_id: DocId, edges: Vec<Edge>) -> Result<(), GraphError>;
+
+    // ── Edge reads ─────────────────────────────────────────────
+
+    /// Direct neighbours of a doc, one hop.
+    fn neighbours(
+        &self,
+        doc_id: DocId,
+        direction: Direction,
+        filter: &EdgeFilter,
+    ) -> Result<Vec<(DocId, Edge)>, GraphError>;
+
+    /// All edges for a doc (both directions, all kinds).
+    fn doc_edges(&self, doc_id: DocId) -> Result<Vec<Edge>, GraphError>;
+
+    /// Total edge count, for status reporting.
+    fn edge_count(&self) -> Result<u64, GraphError>;
+
+    /// Total node count (docs with at least one edge).
+    fn node_count(&self) -> Result<u64, GraphError>;
+
+    // ── Lifecycle ──────────────────────────────────────────────
+
+    /// Rebuild the in-memory `petgraph` from persistent rows.
+    /// Called at daemon startup. Returns the number of edges loaded.
+    fn rebuild_in_memory(&mut self) -> Result<u64, GraphError>;
+
+    /// Drop the in-memory graph (for memory pressure or shutdown).
+    /// Subsequent reads will hit DuckDB only (slow path).
+    fn drop_in_memory(&mut self);
+}
+```
+
+**Implementation**: `DuckDbGraphStore` in `locus-registry::graph` (alongside `DuckDbRegistry`).
+
+### `GraphQueryEngine` trait — `locus-query`
+
+Algorithmic graph queries operating on the in-memory `petgraph` maintained by a `GraphStore`. The concrete implementation is `PetgraphQueryEngine`.
+
+```rust
+/// Algorithmic graph queries — traversal, paths, centrality.
+/// Operates on the in-memory graph maintained by a `GraphStore`.
+pub trait GraphQueryEngine: Send + Sync {
+    /// Execute a graph query.
+    fn query(&self, request: GraphQueryRequest) -> Result<GraphQueryResult, GraphError>;
+
+    /// Multi-hop expansion of a bitmap of seeds.
+    /// This is the composition primitive used by the three-stage pipeline.
+    /// Returns a bitmap (same `DocId` space) so it composes with bitmap
+    /// intersection and vector scoping.
+    fn expand(
+        &self,
+        seeds: &RoaringBitmap,
+        spec: &ExpandSpec,
+    ) -> Result<RoaringBitmap, GraphError>;
+
+    /// Compute centrality scores for every doc, optionally restricted to a candidate set.
+    /// Returns a `Vec<(DocId, f32)>` sorted by descending score.
+    fn centrality(
+        &self,
+        algorithm: CentralityAlgorithm,
+        restrict_to: Option<&RoaringBitmap>,
+    ) -> Result<Vec<(DocId, f32)>, GraphError>;
+
+    /// Shortest path between two docs, respecting an edge filter.
+    /// Returns the sequence of DocIds from `from` to `to`, inclusive.
+    fn shortest_path(
+        &self,
+        from: DocId,
+        to: DocId,
+        filter: &EdgeFilter,
+    ) -> Result<Vec<DocId>, GraphError>;
+
+    /// All nodes reachable from a seed in the given direction.
+    /// Used by provenance impact analysis ("what depends on doc 42?").
+    fn reachable(
+        &self,
+        from: DocId,
+        direction: Direction,
+        filter: &EdgeFilter,
+    ) -> Result<RoaringBitmap, GraphError>;
+
+    /// Snapshot of in-memory graph stats for diagnostics.
+    fn stats(&self) -> Result<GraphStats, GraphError>;
+}
+```
+
+### Extension of `BitmapQueryEngine` — `locus-query`
+
+`BitmapQueryEngine` gains an optional `Arc<dyn GraphQueryEngine>` field and two new methods. `SemanticQueryRequest` gains an optional `graph_expand` field to opt in to the graph expansion stage.
+
+```rust
+// In crates/locus-query/src/engine.rs
+
+pub struct BitmapQueryEngine {
+    bitmap_store: Box<dyn BitmapStore>,
+    registry: Box<dyn Registry>,
+    // NEW — optional. Without it, graph_expand is a no-op pass-through.
+    graph: Option<Arc<dyn GraphQueryEngine>>,
+}
+
+impl BitmapQueryEngine {
+    pub fn with_graph(mut self, graph: Arc<dyn GraphQueryEngine>) -> Self {
+        self.graph = Some(graph);
+        self
+    }
+
+    /// Apply a graph expansion to a previously-computed bitmap result.
+    /// Returns the input unchanged if no graph is configured.
+    pub fn graph_expand(
+        &self,
+        seeds: &RoaringBitmap,
+        spec: &ExpandSpec,
+    ) -> Result<RoaringBitmap, QueryError> {
+        match &self.graph {
+            Some(g) => g.expand(seeds, spec).map_err(|e| QueryError::Semantic(e.to_string())),
+            None => Ok(seeds.clone()),
+        }
+    }
+
+    /// Semantic query with optional graph expansion stage between
+    /// bitmap pre-filter and vector search.
+    pub fn semantic_query_with_graph(
+        &self,
+        request: &SemanticQueryRequest,  // now includes Option<ExpandSpec>
+        embedder: &dyn Embedder,
+        vector_store: &dyn VectorStore,
+        reranker: Option<&dyn Reranker>,
+    ) -> Result<SemanticQueryResult, QueryError>;
+}
+```
+
+#### Extended `SemanticQueryRequest`
+
+```rust
+pub struct SemanticQueryRequest {
+    pub filter: Filter,          // mandatory bitmap pre-filter
+    pub query_text: String,
+    pub top_k: usize,
+    pub rerank: bool,
+    // NEW: when Some, graph expansion is inserted between bitmap and vector stages.
+    pub graph_expand: Option<ExpandSpec>,
+}
+```
+
+#### Extended `SemanticQueryResult`
+
+```rust
+pub struct SemanticQueryResult {
+    pub pointers: Vec<ScoredPointer>,
+    pub bitmap_candidates: u32,
+    pub vector_searched: u32,
+    pub elapsed_bitmap_us: u64,
+    pub elapsed_vector_us: u64,
+    pub elapsed_rerank_us: u64,
+    // NEW: None if graph stage was skipped.
+    pub graph_expanded_to: Option<u32>,
+    pub elapsed_graph_us: u64,
+}
+```
+
+### Crate impact summary
+
+| Crate | Change |
+|-------|--------|
+| `locus-core` | + `graph.rs` with all types, enums, errors, and `GraphStats`. Re-exports from `lib.rs`. |
+| `locus-registry` | + `DuckDbGraphStore` implementing `GraphStore`. New module `graph.rs` with DuckDB DDL. |
+| `locus-ingest` | Edge writes parallel to bitmap writes. `replace_outgoing` on re-index. `resolve_pending` loop on new doc insert. |
+| `locus-query` | + `PetgraphQueryEngine` implementing `GraphQueryEngine`. `BitmapQueryEngine` gains optional graph reference, `with_graph`, and `graph_expand`. |
+| `locus-cli` | + `locus graph` subcommands. + `locus provenance`. |
+| `locus-daemon` | + MCP tools `locus_graph`, `locus_provenance`, `locus_declare_provenance`. Extended `locus_search` and `locus_status`. |

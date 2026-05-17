@@ -1,8 +1,8 @@
 # Locus System Architecture — Overview
 
-> Status: **Phase 2 — Code intelligence implemented (Rust, TypeScript, Python)**
+> Status: **Phase 2 complete (code intelligence); Phase 4 (graph layer) designed**
 > Scope: Obsidian vault + codebase indexing, designed for extensibility to confluence/other sources
-> See also: `002-roadmap.md` for phased build plan
+> See also: `002-roadmap.md` for phased build plan; `008-graph-layer.md` for graph layer design
 
 ## Decisions from Iteration 1
 
@@ -84,7 +84,7 @@ graph TB
 
         VECTOR["Vector Store<br/>─────────<br/>USearch (HNSW)<br/>→ cosine similarity search"]
 
-        QUERY["Query Engine<br/>─────────<br/>filter resolution<br/>→ bitmap intersection<br/>→ optional vector rerank<br/>→ metadata assembly"]
+        QUERY["Query Engine<br/>─────────<br/>filter resolution<br/>→ bitmap intersection<br/>→ optional graph expand<br/>→ optional vector rerank<br/>→ metadata assembly<br/>(PetgraphQueryEngine)"]
 
         IFACE["Interface Layer<br/>─────────<br/>MCP Server │ HTTP API │ CLI"]
     end
@@ -114,6 +114,7 @@ graph TB
 | **Embedding** | Chunk text | `EmbeddingVector` (f32 dense vectors) | Model cache (`~/.cache/fastembed/`) |
 | **Ingestion** | `ChangeEvent` | Writes to Registry + Bitmap Store + Vector Store | Diffing logic, BLAKE3 hashing |
 | **Registry** | CRUD operations | `DocRecord`, `ChunkRecord`, `BitmapCatalogEntry` | DuckDB |
+| **Graph Store** (`locus-registry::graph`) | Edge writes + in-memory graph lifecycle | `GraphQueryResult`, `GraphStats` | DuckDB (`doc_links`, `doc_links_pending`) + petgraph in-memory |
 | **Bitmap Store** | key → bitmap ops | Roaring Bitmaps (serialized portable) | LMDB |
 | **Vector Store** | chunk_id → vector ops | Cosine similarity results | USearch (HNSW) |
 | **Query Engine** | `QueryRequest` / `SemanticQueryRequest` | `QueryResult` / `SemanticQueryResult` | Query planning, bitmap→vector scoping |
@@ -329,6 +330,61 @@ flowchart TD
 ```
 
 The cardinality sort is the key optimisation: if `type:task` has 12 entries and `tag:work` has 50,000, we start with the 12-entry bitmap. CPU work is proportional to the smallest set.
+
+---
+
+## 7b. Graph Layer (Phase 4 — designed, not yet implemented)
+
+The graph layer is the third pillar of the retrieval pipeline. It slots between bitmap pre-filtering and vector reranking, enabling multi-hop traversal, centrality, shortest paths, and provenance DAG queries — capabilities that bitmaps cannot provide.
+
+### Three-stage query pipeline
+
+```mermaid
+flowchart LR
+    Q["User query"]
+    BF["Stage 1: Bitmap filter<br/>~10us<br/>doc set S0"]
+    GX["Stage 2: Graph expand<br/>~100us-1ms<br/>doc set S1 = expand(S0, hops, edge_filter)"]
+    VR["Stage 3: Vector rerank<br/>~10-50ms<br/>top-k chunks from S1"]
+    OUT["MatchPointers"]
+
+    Q --> BF --> GX --> VR --> OUT
+```
+
+Stage 2 is **optional and composable**: existing queries skip it entirely and remain unchanged. New graph-aware queries opt in via `SemanticQueryRequest.graph_expand: Option<ExpandSpec>`. The key invariant is that `RoaringBitmap<DocId>` is the uniform carrier between all three stages.
+
+### In-memory graph strategy
+
+- **DuckDB as source of truth**: edges are persisted in two tables — `doc_links` (resolved) and `doc_links_pending` (unresolved forward references). The schema uses a composite primary key `(from_id, to_id, kind)` allowing multigraph edges.
+- **`petgraph::StableGraph<DocId, Edge, Directed>` in memory**: rebuilt from DuckDB at daemon startup. Traversal algorithms (BFS, Dijkstra, PageRank) operate against the in-memory adjacency lists, not DuckDB, keeping multi-hop latency under 1 ms.
+- **`Arc<RwLock<StableGraph>>` for concurrency**: read-mostly workload; ingestion holds a write lock briefly per batch. A separate `HashMap<DocId, NodeIndex>` provides O(1) lookup from `DocId` to petgraph node.
+- **Crash recovery**: the in-memory graph is a derived index. On crash, it is rebuilt from DuckDB rows on next startup (~500 ms for 100K docs / 1M edges). `drop_in_memory()` and `rebuild_in_memory()` allow explicit control under memory pressure.
+
+### Edge taxonomy
+
+Five top-level edge categories, uniform across all source types:
+
+| Category | Direction | Examples |
+|----------|-----------|---------|
+| `Reference` | Directed | Obsidian `[[wikilink]]`, `@mention` |
+| `Dependency` | Directed | Code `import`/`use`, `{include:}` macros |
+| `Hierarchy` | Child → parent | Folder containment, Confluence page parent, Slack thread |
+| `Workflow` | Directed, labelled | Jira `blocks`/`closes`, GitHub PR `closes #N` |
+| `Provenance` | Asset → source | LLM-generated file → source docs, session lineage |
+
+Edge `kind` strings follow the pattern `"<category>:<subtype>"` (e.g. `ref:wikilink`, `dep:import`, `flow:blocks`, `prov:generated`).
+
+### Key crate additions
+
+| Crate | Addition |
+|-------|----------|
+| `locus-core` | `graph.rs` — all types, traits, and errors |
+| `locus-registry` | `DuckDbGraphStore` (`GraphStore` impl), DDL for `doc_links` + `doc_links_pending` |
+| `locus-query` | `PetgraphQueryEngine` (`GraphQueryEngine` impl); `BitmapQueryEngine` gains `with_graph` + `graph_expand` |
+| `locus-ingest` | Edge writes parallel to bitmap writes; `resolve_pending` on new doc insert |
+| `locus-cli` | `locus graph` subcommands; `locus provenance` |
+| `locus-daemon` | `locus_graph`, `locus_provenance`, `locus_declare_provenance` MCP tools |
+
+See `003-contracts.md` §"Graph Layer" for all Rust trait and type signatures.
 
 ---
 
