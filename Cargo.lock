@@ -2575,6 +2575,7 @@ dependencies = [
  "locus-bitmap",
  "locus-code",
  "locus-core",
+ "locus-embed",
  "locus-enrich",
  "locus-parser",
  "locus-query",

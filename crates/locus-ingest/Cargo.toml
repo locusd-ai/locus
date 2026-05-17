@@ -11,6 +11,8 @@ locus-registry = { workspace = true }
 locus-bitmap = { workspace = true }
 locus-query = { workspace = true }
 locus-enrich = { workspace = true }
+locus-code = { workspace = true }
+locus-embed = { workspace = true }
 blake3 = { workspace = true }
 roaring = { workspace = true }
 thiserror = { workspace = true }
@@ -26,6 +28,10 @@ ignore = "0.4"
 [[bin]]
 name = "locus-scale-test"
 path = "src/bin/locus_scale_test.rs"
+
+[[bin]]
+name = "locus-bench-phase2"
+path = "src/bin/locus_bench_phase2.rs"
 
 [dev-dependencies]
 tempfile = "3"
