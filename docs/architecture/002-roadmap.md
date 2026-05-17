@@ -293,10 +293,34 @@ The data is nearly free: links are already extracted by the parser and stored as
 
 Support non-filesystem sources.
 
-### Planned Work
+### Workstream 1: Parser Extensibility (Prerequisite)
+
+The `Parser` trait is clean and pluggable, but several closed enums in `locus-core` block third-party parsers from expressing a genuinely new source type without forking core. This workstream opens those seams before any new sources are added.
+
+**Closed enums to open:**
+
+| Type | Problem | Fix |
+|------|---------|-----|
+| `SourceType` | Only `Obsidian` / `Code`; new sources infer as `Obsidian` | Add `Custom(String)` variant |
+| `DocType` | No way to express Confluence page, Jira ticket, etc. | Add `Custom(String)` variant |
+| `BitmapCategory` | `Custom` already exists — no change needed | — |
+
+**Pipeline changes:**
+- `infer_source_type` currently uses a `lang:` tag heuristic. Instead, parsers should signal their source type by emitting a `source:<name>` string in `ParseResult.tags`; the pipeline reads that tag and resolves `SourceType::Custom(name)`.
+- `source_key` and `type_key` match arms need `Custom(s)` branches.
+
+**Planned work:**
+- [ ] Add `SourceType::Custom(String)` and `DocType::Custom(String)` to `locus-core/src/types.rs`
+- [ ] Update `infer_source_type` in `locus-ingest`: read `source:*` tag from `ParseResult.tags` → `SourceType::Custom`; fall back to heuristic only if absent
+- [ ] Update `source_key` / `type_key` match arms in `locus-ingest/src/pipeline.rs`
+- [ ] Update `003-contracts.md` and `001-system-overview.md` to reflect open types
+- [ ] Add `docs/parsers.md` — guide covering: `Parser` trait, `ParseResult` fields, bitmap key naming conventions (`tag:`, `source:`, `kind:`, `lang:`), and a minimal worked example
+
+### Workstream 2: New Source Feeds
+
 - [ ] SourceFeed implementations: Confluence, Jira, Slack
 - [ ] Webhook/polling-based ingestion
-- [ ] Source-specific parsers
+- [ ] Source-specific parsers (each emits `source:<name>` to signal type)
 - [ ] Unified cross-source queries (`tag:work AND source:confluence`)
 
 ---
