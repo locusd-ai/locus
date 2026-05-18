@@ -6,6 +6,7 @@ use std::time::Instant;
 use tracing::{info, instrument, warn};
 
 use locus_core::bitmap::{BitmapError, BitmapStore};
+use locus_core::graph::{Edge, EdgeCategory, GraphStore, UnresolvedEdge};
 use locus_core::parser::{ParseError, Parser};
 use locus_core::registry::{
     NewChunk, NewDoc, Registry, RegistryError,
@@ -13,7 +14,7 @@ use locus_core::registry::{
 use locus_core::semantic::{Embedder, VectorStore};
 use locus_core::types::{
     BitmapKey, ChangeEvent, ChangeKind, DocId, DocType,
-    ParseResult, SourceType, Visibility,
+    ParseResult, SourceType, Timestamp, Visibility,
 };
 use locus_enrich::TagPipeline;
 
@@ -82,6 +83,7 @@ pub struct IngestionPipeline {
     tag_pipeline: Option<TagPipeline>,
     embedder: Option<Box<dyn Embedder>>,
     vector_store: Option<Box<dyn VectorStore>>,
+    graph_store: Option<Box<dyn GraphStore>>,
 }
 
 impl IngestionPipeline {
@@ -97,6 +99,7 @@ impl IngestionPipeline {
             tag_pipeline: None,
             embedder: None,
             vector_store: None,
+            graph_store: None,
         }
     }
 
@@ -110,6 +113,12 @@ impl IngestionPipeline {
     pub fn with_embedder(mut self, embedder: Box<dyn Embedder>, vector_store: Box<dyn VectorStore>) -> Self {
         self.embedder = Some(embedder);
         self.vector_store = Some(vector_store);
+        self
+    }
+
+    /// Set the graph store. If set, link edges are written during ingestion.
+    pub fn with_graph_store(mut self, gs: Box<dyn GraphStore>) -> Self {
+        self.graph_store = Some(gs);
         self
     }
 
@@ -128,6 +137,129 @@ impl IngestionPipeline {
         Option<Box<dyn VectorStore>>,
     ) {
         (self.parsers, self.registry, self.bitmap_store, self.vector_store)
+    }
+
+    /// Decompose including the optional graph store.
+    pub fn into_parts_with_graph(
+        self,
+    ) -> (
+        Vec<Box<dyn Parser>>,
+        Box<dyn Registry>,
+        Box<dyn BitmapStore>,
+        Option<Box<dyn GraphStore>>,
+    ) {
+        (self.parsers, self.registry, self.bitmap_store, self.graph_store)
+    }
+
+    // ── Graph helpers ────────────────────────────────────────────
+
+    fn now_secs() -> Timestamp {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as Timestamp
+    }
+
+    /// Map source type + link to an edge (category, kind) pair.
+    fn edge_kind_for_link(source: &SourceType) -> (EdgeCategory, &'static str) {
+        match source {
+            SourceType::Code => (EdgeCategory::Dependency, "dep:import"),
+            SourceType::Obsidian => (EdgeCategory::Reference, "ref:wikilink"),
+            SourceType::Custom(_) => (EdgeCategory::Reference, "ref:link"),
+        }
+    }
+
+    /// Build resolved and unresolved edge lists from a parse result.
+    ///
+    /// Tries an exact path lookup first; unmatched targets become unresolved edges
+    /// and are promoted by `resolve_pending` when the target doc is later indexed.
+    fn build_edge_lists(
+        registry: &dyn Registry,
+        doc_id: DocId,
+        source: &SourceType,
+        result: &ParseResult,
+        ts: Timestamp,
+    ) -> (Vec<Edge>, Vec<UnresolvedEdge>) {
+        let (category, kind_str) = Self::edge_kind_for_link(source);
+        let mut resolved = Vec::new();
+        let mut unresolved = Vec::new();
+
+        for link in &result.links {
+            let target_path = std::path::Path::new(&link.target);
+            let target_doc = registry.lookup_by_path(target_path).ok().flatten();
+            if let Some(target) = target_doc {
+                resolved.push(Edge {
+                    from: doc_id,
+                    to: target.doc_id,
+                    category,
+                    kind: kind_str.to_string(),
+                    weight: 1.0,
+                    byte_offset: Some(link.byte_offset as u32),
+                    created_at: ts,
+                });
+            } else {
+                unresolved.push(UnresolvedEdge {
+                    from: doc_id,
+                    category,
+                    kind: kind_str.to_string(),
+                    target_ref: link.target.clone(),
+                    byte_offset: Some(link.byte_offset as u32),
+                });
+            }
+        }
+        (resolved, unresolved)
+    }
+
+    /// Write edges to the graph store for a newly indexed doc.
+    /// Uses bulk_insert for resolved edges; inserts each unresolved edge individually.
+    /// Then calls resolve_pending so any prior unresolved edges pointing TO this doc are promoted.
+    fn graph_write_new(
+        gs: &mut dyn GraphStore,
+        doc_id: DocId,
+        path: &Path,
+        resolved: Vec<Edge>,
+        unresolved: Vec<UnresolvedEdge>,
+    ) {
+        if let Err(e) = gs.bulk_insert_edges(resolved) {
+            warn!(doc_id, error = %e, "graph bulk_insert_edges failed");
+        }
+        for ue in unresolved {
+            if let Err(e) = gs.insert_unresolved(ue) {
+                warn!(doc_id, error = %e, "graph insert_unresolved failed");
+            }
+        }
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Err(e) = gs.resolve_pending(doc_id, &stem) {
+            warn!(doc_id, error = %e, "graph resolve_pending failed");
+        }
+    }
+
+    /// Atomically replace outgoing edges for a re-indexed doc.
+    fn graph_replace_outgoing(
+        gs: &mut dyn GraphStore,
+        doc_id: DocId,
+        path: &Path,
+        resolved: Vec<Edge>,
+        unresolved: Vec<UnresolvedEdge>,
+    ) {
+        if let Err(e) = gs.replace_outgoing(doc_id, resolved) {
+            warn!(doc_id, error = %e, "graph replace_outgoing failed");
+        }
+        for ue in unresolved {
+            if let Err(e) = gs.insert_unresolved(ue) {
+                warn!(doc_id, error = %e, "graph insert_unresolved failed");
+            }
+        }
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Err(e) = gs.resolve_pending(doc_id, &stem) {
+            warn!(doc_id, error = %e, "graph resolve_pending failed");
+        }
     }
 
     /// Find the first parser that can handle the given path.
@@ -390,6 +522,20 @@ impl IngestionPipeline {
             .iter().map(|c| c.chunk_id).collect();
         self.embed_chunks(&content, &result, &chunk_ids);
 
+        // Write graph edges if graph store configured
+        if self.graph_store.is_some() {
+            let ts = Self::now_secs();
+            let (resolved, unresolved) =
+                Self::build_edge_lists(&*self.registry, doc_id, &source, &result, ts);
+            Self::graph_write_new(
+                self.graph_store.as_deref_mut().unwrap(),
+                doc_id,
+                path,
+                resolved,
+                unresolved,
+            );
+        }
+
         info!(doc_id, bitmaps = updated, "indexed new document");
         Ok(IngestResult {
             action: IngestAction::Indexed,
@@ -473,6 +619,25 @@ impl IngestionPipeline {
             .iter().map(|c| c.chunk_id).collect();
         self.embed_chunks(&content, &result, &chunk_ids);
 
+        // Replace graph edges atomically if graph store configured
+        if self.graph_store.is_some() {
+            let ts = Self::now_secs();
+            let (resolved, unresolved) = Self::build_edge_lists(
+                &*self.registry,
+                doc_record.doc_id,
+                &source,
+                &result,
+                ts,
+            );
+            Self::graph_replace_outgoing(
+                self.graph_store.as_deref_mut().unwrap(),
+                doc_record.doc_id,
+                path,
+                resolved,
+                unresolved,
+            );
+        }
+
         let updated = (removed.len() + added.len()) as u32;
         info!(doc_id = doc_record.doc_id, bitmaps = updated, "updated document");
         Ok(IngestResult {
@@ -509,6 +674,13 @@ impl IngestionPipeline {
             if bm.contains(doc_id) {
                 self.bitmap_store.remove_id(key, doc_id)?;
                 removed += 1;
+            }
+        }
+
+        // Remove graph edges in both directions
+        if let Some(gs) = &mut self.graph_store {
+            if let Err(e) = gs.remove_doc_edges(doc_id) {
+                warn!(doc_id, error = %e, "graph remove_doc_edges failed");
             }
         }
 
@@ -621,6 +793,18 @@ impl IngestionPipeline {
                         .iter().map(|c| c.chunk_id).collect();
                     self.embed_chunks(&content, &result, &chunk_ids);
 
+                    // Replace graph edges atomically for changed doc
+                    if self.graph_store.is_some() {
+                        let ts = Self::now_secs();
+                        let (resolved, unresolved) = Self::build_edge_lists(
+                            &*self.registry, existing.doc_id, &source, &result, ts,
+                        );
+                        Self::graph_replace_outgoing(
+                            self.graph_store.as_deref_mut().unwrap(),
+                            existing.doc_id, path, resolved, unresolved,
+                        );
+                    }
+
                     let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
                     for key in keys {
                         all_bitmap_entries
@@ -651,6 +835,18 @@ impl IngestionPipeline {
                     .iter().map(|c| c.chunk_id).collect();
                 self.embed_chunks(&content, &result, &chunk_ids);
 
+                // Write graph edges for new doc
+                if self.graph_store.is_some() {
+                    let ts = Self::now_secs();
+                    let (resolved, unresolved) = Self::build_edge_lists(
+                        &*self.registry, doc_id, &source, &result, ts,
+                    );
+                    Self::graph_write_new(
+                        self.graph_store.as_deref_mut().unwrap(),
+                        doc_id, path, resolved, unresolved,
+                    );
+                }
+
                 let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
                 for key in keys {
                     all_bitmap_entries
@@ -673,6 +869,12 @@ impl IngestionPipeline {
                     let bm = self.bitmap_store.get(key)?;
                     if bm.contains(doc.doc_id) {
                         self.bitmap_store.remove_id(key, doc.doc_id)?;
+                    }
+                }
+                // Remove graph edges in both directions
+                if let Some(gs) = &mut self.graph_store {
+                    if let Err(e) = gs.remove_doc_edges(doc.doc_id) {
+                        warn!(doc_id = doc.doc_id, error = %e, "graph remove_doc_edges failed");
                     }
                 }
                 docs_tombstoned += 1;
