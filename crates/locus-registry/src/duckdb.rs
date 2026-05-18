@@ -1,7 +1,7 @@
 //! DuckDB-backed Registry implementation.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use locus_core::registry::{
     BitmapCatalogEntry, ChunkRecord, DocRecord, GlobalState, NewChunk, NewDoc,
@@ -19,7 +19,7 @@ use tracing::instrument;
 /// This is fine because BIEM's core is single-threaded sync; concurrency is handled
 /// at the boundary via `spawn_blocking`.
 pub struct DuckDbRegistry {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl DuckDbRegistry {
@@ -28,9 +28,15 @@ impl DuckDbRegistry {
     pub fn new(path: &str) -> Result<Self, RegistryError> {
         let conn =
             Connection::open(path).map_err(|e| RegistryError::Database(e.to_string()))?;
-        let registry = Self { conn: Mutex::new(conn) };
+        let registry = Self { conn: Arc::new(Mutex::new(conn)) };
         registry.init_schema()?;
         Ok(registry)
+    }
+
+    /// Return a shared handle to the underlying connection.
+    /// Used by `DuckDbGraphStore` to share the same DuckDB file.
+    pub fn connection(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
     }
 
     /// Acquire the connection lock. Panics if poisoned (unrecoverable).
@@ -78,6 +84,33 @@ impl DuckDbRegistry {
 
                 INSERT OR IGNORE INTO global_state (id, next_doc_id, next_chunk_id, total_documents)
                 VALUES (1, 1, 1, 0);
+
+                CREATE TABLE IF NOT EXISTS doc_links (
+                    from_id     UINTEGER NOT NULL,
+                    to_id       UINTEGER NOT NULL,
+                    category    VARCHAR  NOT NULL,
+                    kind        VARCHAR  NOT NULL,
+                    weight      REAL     NOT NULL DEFAULT 1.0,
+                    byte_offset UINTEGER,
+                    created_at  BIGINT   NOT NULL,
+                    PRIMARY KEY (from_id, to_id, kind)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_doc_links_from ON doc_links(from_id);
+                CREATE INDEX IF NOT EXISTS idx_doc_links_to   ON doc_links(to_id);
+                CREATE INDEX IF NOT EXISTS idx_doc_links_cat  ON doc_links(category);
+
+                CREATE TABLE IF NOT EXISTS doc_links_pending (
+                    from_id     UINTEGER NOT NULL,
+                    target_ref  VARCHAR  NOT NULL,
+                    category    VARCHAR  NOT NULL,
+                    kind        VARCHAR  NOT NULL,
+                    byte_offset UINTEGER,
+                    created_at  BIGINT   NOT NULL,
+                    PRIMARY KEY (from_id, target_ref, kind)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_doc_links_pending_target ON doc_links_pending(target_ref);
                 ",
             )
             .map_err(|e| RegistryError::Database(e.to_string()))?;

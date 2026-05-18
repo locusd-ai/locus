@@ -4,3 +4,4 @@ pub use locus_core::{Registry, RegistryError};
 
 pub mod memory;
 pub mod duckdb;
+pub mod graph;
