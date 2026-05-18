@@ -12,6 +12,7 @@ pub mod query;
 pub mod config;
 pub mod enrich;
 pub mod semantic;
+pub mod graph;
 
 pub use types::*;
 pub use parser::*;
