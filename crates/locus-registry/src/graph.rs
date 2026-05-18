@@ -1,9 +1,15 @@
-//! DuckDB-backed GraphStore implementation.
+//! DuckDB-backed GraphStore implementation with petgraph in-memory layer.
 
+use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 use duckdb::{params, Connection};
+use petgraph::graph::NodeIndex;
+use petgraph::stable_graph::StableGraph;
+use petgraph::visit::EdgeRef;
+use petgraph::Directed;
 
 use locus_core::graph::{
     Direction, Edge, EdgeCategory, EdgeFilter, GraphError, GraphStats, GraphStore, UnresolvedEdge,
@@ -17,21 +23,97 @@ fn now() -> Timestamp {
         .as_secs() as Timestamp
 }
 
-/// DuckDB-backed [`GraphStore`].
+// ── In-memory graph state ────────────────────────────────────────
+
+struct InMemoryGraph {
+    graph: StableGraph<DocId, Edge, Directed>,
+    node_index: HashMap<DocId, NodeIndex>,
+    last_rebuilt: Option<Timestamp>,
+    bytes_estimate: u64,
+}
+
+impl InMemoryGraph {
+    fn new() -> Self {
+        Self {
+            graph: StableGraph::new(),
+            node_index: HashMap::new(),
+            last_rebuilt: None,
+            bytes_estimate: 0,
+        }
+    }
+
+    fn get_or_add_node(&mut self, doc_id: DocId) -> NodeIndex {
+        if let Some(&idx) = self.node_index.get(&doc_id) {
+            return idx;
+        }
+        let idx = self.graph.add_node(doc_id);
+        self.node_index.insert(doc_id, idx);
+        idx
+    }
+
+    fn add_edge(&mut self, edge: &Edge) {
+        let from_idx = self.get_or_add_node(edge.from);
+        let to_idx = self.get_or_add_node(edge.to);
+        self.graph.add_edge(from_idx, to_idx, edge.clone());
+        // Rough per-edge byte estimate: 2 DocIds + kind string + fixed fields
+        self.bytes_estimate += 64 + edge.kind.len() as u64;
+    }
+
+    fn remove_doc(&mut self, doc_id: DocId) {
+        if let Some(idx) = self.node_index.remove(&doc_id) {
+            // Collect edges incident to this node before removing.
+            let edges: Vec<_> = self
+                .graph
+                .edges(idx)
+                .map(|e| e.id())
+                .chain(
+                    self.graph
+                        .edges_directed(idx, petgraph::Direction::Incoming)
+                        .map(|e| e.id()),
+                )
+                .collect();
+            for eid in edges {
+                self.bytes_estimate =
+                    self.bytes_estimate.saturating_sub(64);
+                self.graph.remove_edge(eid);
+            }
+            self.graph.remove_node(idx);
+        }
+    }
+}
+
+// ── DuckDbGraphStore ─────────────────────────────────────────────
+
+/// DuckDB-backed [`GraphStore`] with write-through petgraph in-memory layer.
 ///
 /// Shares the same `Connection` as `DuckDbRegistry` via `Arc<Mutex<Connection>>`.
 /// All tables (`doc_links`, `doc_links_pending`) are created by `DuckDbRegistry::init_schema`.
 pub struct DuckDbGraphStore {
     conn: Arc<Mutex<Connection>>,
+    mem: Arc<RwLock<Option<InMemoryGraph>>>,
 }
 
 impl DuckDbGraphStore {
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            mem: Arc::new(RwLock::new(None)),
+        }
     }
 
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap()
+    }
+
+    fn with_mem_write<F>(&self, f: F)
+    where
+        F: FnOnce(&mut InMemoryGraph),
+    {
+        let mut guard = self.mem.write().unwrap();
+        if let Some(ref mut g) = *guard {
+            f(g);
+        }
+        // If mem is None, skip — reads fall back to DuckDB.
     }
 }
 
@@ -53,6 +135,7 @@ impl GraphStore for DuckDbGraphStore {
                 ],
             )
             .map_err(|e| GraphError::Storage(e.to_string()))?;
+        self.with_mem_write(|g| g.add_edge(&edge));
         Ok(())
     }
 
@@ -61,9 +144,10 @@ impl GraphStore for DuckDbGraphStore {
             return Ok(());
         }
         let conn = self.conn();
-        let tx = conn.unchecked_transaction()
+        let tx = conn
+            .unchecked_transaction()
             .map_err(|e| GraphError::Storage(e.to_string()))?;
-        for edge in edges {
+        for edge in &edges {
             tx.execute(
                 "INSERT OR REPLACE INTO doc_links
                  (from_id, to_id, category, kind, weight, byte_offset, created_at)
@@ -81,6 +165,14 @@ impl GraphStore for DuckDbGraphStore {
             .map_err(|e| GraphError::Storage(e.to_string()))?;
         }
         tx.commit().map_err(|e| GraphError::Storage(e.to_string()))?;
+        drop(conn);
+
+        let mut guard = self.mem.write().unwrap();
+        if let Some(ref mut g) = *guard {
+            for edge in &edges {
+                g.add_edge(edge);
+            }
+        }
         Ok(())
     }
 
@@ -108,11 +200,8 @@ impl GraphStore for DuckDbGraphStore {
         //   1. Exact target_ref match (e.g. full path)
         //   2. Stem/title match — target_ref equals the file stem of the new doc's path
         //      (handles Obsidian wikilinks like [[NoteTitle]] → note-title.md)
-        //
-        // We look up the doc's file_path from the documents table to get its stem.
         let conn = self.conn();
 
-        // Get the file path stem for title-based resolution.
         let file_path: Option<String> = {
             let mut stmt = conn
                 .prepare("SELECT file_path FROM documents WHERE doc_id = ?")
@@ -163,6 +252,7 @@ impl GraphStore for DuckDbGraphStore {
             .unchecked_transaction()
             .map_err(|e| GraphError::Storage(e.to_string()))?;
 
+        let mut promoted: Vec<Edge> = Vec::with_capacity(pending.len());
         for (from_id, category_str, kind, byte_offset) in &pending {
             let category = EdgeCategory::from_str(category_str)
                 .map_err(|e| GraphError::Storage(e.to_string()))?;
@@ -173,9 +263,17 @@ impl GraphStore for DuckDbGraphStore {
                 params![from_id, doc_id, category.as_str(), kind, byte_offset, ts],
             )
             .map_err(|e| GraphError::Storage(e.to_string()))?;
+            promoted.push(Edge {
+                from: *from_id,
+                to: doc_id,
+                category,
+                kind: kind.clone(),
+                weight: 1.0,
+                byte_offset: *byte_offset,
+                created_at: ts,
+            });
         }
 
-        // Remove promoted pending edges.
         let stem_ref = stem.as_deref().unwrap_or("");
         tx.execute(
             "DELETE FROM doc_links_pending WHERE target_ref = ? OR target_ref = ?",
@@ -184,6 +282,14 @@ impl GraphStore for DuckDbGraphStore {
         .map_err(|e| GraphError::Storage(e.to_string()))?;
 
         tx.commit().map_err(|e| GraphError::Storage(e.to_string()))?;
+        drop(conn);
+
+        let mut guard = self.mem.write().unwrap();
+        if let Some(ref mut g) = *guard {
+            for edge in &promoted {
+                g.add_edge(edge);
+            }
+        }
 
         Ok(pending.len() as u32)
     }
@@ -201,6 +307,9 @@ impl GraphStore for DuckDbGraphStore {
             params![doc_id],
         )
         .map_err(|e| GraphError::Storage(e.to_string()))?;
+        drop(conn);
+
+        self.with_mem_write(|g| g.remove_doc(doc_id));
         Ok(n as u32)
     }
 
@@ -219,7 +328,7 @@ impl GraphStore for DuckDbGraphStore {
             params![doc_id],
         )
         .map_err(|e| GraphError::Storage(e.to_string()))?;
-        for edge in edges {
+        for edge in &edges {
             tx.execute(
                 "INSERT OR REPLACE INTO doc_links
                  (from_id, to_id, category, kind, weight, byte_offset, created_at)
@@ -237,6 +346,26 @@ impl GraphStore for DuckDbGraphStore {
             .map_err(|e| GraphError::Storage(e.to_string()))?;
         }
         tx.commit().map_err(|e| GraphError::Storage(e.to_string()))?;
+        drop(conn);
+
+        // Remove all outgoing edges for this doc from the in-memory graph, then re-add.
+        let mut guard = self.mem.write().unwrap();
+        if let Some(ref mut g) = *guard {
+            if let Some(&from_idx) = g.node_index.get(&doc_id) {
+                let outgoing: Vec<_> = g
+                    .graph
+                    .edges(from_idx)
+                    .map(|e| e.id())
+                    .collect();
+                for eid in outgoing {
+                    g.bytes_estimate = g.bytes_estimate.saturating_sub(64);
+                    g.graph.remove_edge(eid);
+                }
+            }
+            for edge in &edges {
+                g.add_edge(edge);
+            }
+        }
         Ok(())
     }
 
@@ -246,6 +375,54 @@ impl GraphStore for DuckDbGraphStore {
         direction: Direction,
         filter: &EdgeFilter,
     ) -> Result<Vec<(DocId, Edge)>, GraphError> {
+        // Fast path: use in-memory graph if available.
+        {
+            let guard = self.mem.read().unwrap();
+            if let Some(ref g) = *guard {
+                if let Some(&idx) = g.node_index.get(&doc_id) {
+                    let edges: Vec<_> = match direction {
+                        Direction::Outgoing => g
+                            .graph
+                            .edges(idx)
+                            .map(|e| e.weight().clone())
+                            .collect(),
+                        Direction::Incoming => g
+                            .graph
+                            .edges_directed(idx, petgraph::Direction::Incoming)
+                            .map(|e| e.weight().clone())
+                            .collect(),
+                        Direction::Both => g
+                            .graph
+                            .edges(idx)
+                            .chain(
+                                g.graph
+                                    .edges_directed(idx, petgraph::Direction::Incoming),
+                            )
+                            .map(|e| e.weight().clone())
+                            .collect(),
+                    };
+                    let result = edges
+                        .into_iter()
+                        .filter(|e| filter.matches(e))
+                        .map(|e| {
+                            let neighbour = match direction {
+                                Direction::Outgoing => e.to,
+                                Direction::Incoming => e.from,
+                                Direction::Both => {
+                                    if e.from == doc_id { e.to } else { e.from }
+                                }
+                            };
+                            (neighbour, e)
+                        })
+                        .collect();
+                    return Ok(result);
+                }
+                // Doc has no edges — return empty without DuckDB fallback.
+                return Ok(vec![]);
+            }
+        }
+
+        // Slow path: query DuckDB.
         let conn = self.conn();
         let sql = match direction {
             Direction::Outgoing => {
@@ -338,17 +515,56 @@ impl GraphStore for DuckDbGraphStore {
     }
 
     fn rebuild_in_memory(&mut self) -> Result<u64, GraphError> {
-        // No-op until petgraph is added in Task 4.
-        Ok(0)
+        let start = Instant::now();
+        let mut g = InMemoryGraph::new();
+
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT from_id, to_id, category, kind, weight, byte_offset, created_at
+                 FROM doc_links",
+            )
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+
+        let rows: Result<Vec<Edge>, _> = stmt
+            .query_map([], row_to_edge)
+            .map_err(|e| GraphError::Storage(e.to_string()))?
+            .collect();
+        let edges = rows.map_err(|e| GraphError::Storage(e.to_string()))?;
+        let count = edges.len() as u64;
+
+        for edge in &edges {
+            g.add_edge(edge);
+        }
+        g.last_rebuilt = Some(now());
+
+        drop(conn);
+        let elapsed = start.elapsed();
+        tracing::info!(edges = count, elapsed_ms = elapsed.as_millis(), "graph rebuilt in memory");
+
+        *self.mem.write().unwrap() = Some(g);
+        Ok(count)
     }
 
     fn drop_in_memory(&mut self) {
-        // No-op until petgraph is added in Task 4.
+        *self.mem.write().unwrap() = None;
     }
 
     fn stats(&self) -> Result<GraphStats, GraphError> {
-        let edge_count = self.edge_count()?;
-        let node_count = self.node_count()?;
+        let (edge_count, node_count, last_rebuilt, in_memory_bytes) = {
+            let guard = self.mem.read().unwrap();
+            if let Some(ref g) = *guard {
+                (
+                    g.graph.edge_count() as u64,
+                    g.graph.node_count() as u64,
+                    g.last_rebuilt,
+                    g.bytes_estimate,
+                )
+            } else {
+                drop(guard);
+                (self.edge_count()?, self.node_count()?, None, 0)
+            }
+        };
 
         let conn = self.conn();
         let mut stmt = conn
@@ -370,16 +586,15 @@ impl GraphStore for DuckDbGraphStore {
             node_count,
             edge_count,
             edges_by_category,
-            in_memory_bytes: 0,
-            last_rebuilt: None,
+            in_memory_bytes,
+            last_rebuilt,
         })
     }
 }
 
 fn row_to_edge(row: &duckdb::Row<'_>) -> duckdb::Result<Edge> {
     let category_str: String = row.get(2)?;
-    let category = EdgeCategory::from_str(&category_str)
-        .unwrap_or(EdgeCategory::Reference);
+    let category = EdgeCategory::from_str(&category_str).unwrap_or(EdgeCategory::Reference);
     Ok(Edge {
         from: row.get(0)?,
         to: row.get(1)?,
@@ -399,7 +614,6 @@ mod tests {
     use locus_core::graph::{EdgeCategory, UnresolvedEdge};
 
     fn open_store() -> DuckDbGraphStore {
-        // Use an in-memory DuckDB shared via the registry connection.
         use crate::duckdb::DuckDbRegistry;
         let registry = DuckDbRegistry::new(":memory:").unwrap();
         DuckDbGraphStore::new(registry.connection())
@@ -452,10 +666,8 @@ mod tests {
     #[test]
     fn replace_outgoing_is_atomic() {
         let mut store = open_store();
-        // First index: 1 → 2, 1 → 3
         store.insert_edge(make_edge(1, 2, "ref:wikilink")).unwrap();
         store.insert_edge(make_edge(1, 3, "ref:wikilink")).unwrap();
-        // Re-index: now only 1 → 4
         store
             .replace_outgoing(1, vec![make_edge(1, 4, "ref:wikilink")])
             .unwrap();
@@ -510,7 +722,6 @@ mod tests {
     fn insert_unresolved_and_resolve_pending_by_title() {
         let mut store = open_store();
 
-        // A pending edge from doc 1 to a not-yet-indexed "ProjectAlpha"
         store
             .insert_unresolved(UnresolvedEdge {
                 from: 1,
@@ -521,8 +732,6 @@ mod tests {
             })
             .unwrap();
 
-        // Simulate inserting doc 2 whose file stem is "ProjectAlpha"
-        // We need to insert into the documents table so resolve_pending can look it up.
         {
             let conn = store.conn();
             conn.execute(
@@ -536,11 +745,11 @@ mod tests {
         let resolved = store.resolve_pending(2, "ProjectAlpha").unwrap();
         assert_eq!(resolved, 1);
 
-        // The edge should now be in doc_links.
         let neighbours = store
             .neighbours(1, Direction::Outgoing, &EdgeFilter::Any)
             .unwrap();
         assert_eq!(neighbours.len(), 1);
+        assert_eq!(neighbours[0].0, 2);
     }
 
     #[test]
@@ -562,5 +771,72 @@ mod tests {
         assert_eq!(stats.edge_count, 2);
         assert_eq!(stats.edges_by_category.get("reference"), Some(&1));
         assert_eq!(stats.edges_by_category.get("dependency"), Some(&1));
+    }
+
+    #[test]
+    fn rebuild_in_memory_loads_all_edges() {
+        let mut store = open_store();
+        let edges: Vec<Edge> = (1u32..=10).map(|i| make_edge(0, i, "ref:wikilink")).collect();
+        store.bulk_insert_edges(edges).unwrap();
+
+        // mem is None before rebuild.
+        assert!(store.mem.read().unwrap().is_none());
+
+        let count = store.rebuild_in_memory().unwrap();
+        assert_eq!(count, 10);
+        assert!(store.mem.read().unwrap().is_some());
+
+        // Neighbours now served from memory.
+        let neighbours = store
+            .neighbours(0, Direction::Outgoing, &EdgeFilter::Any)
+            .unwrap();
+        assert_eq!(neighbours.len(), 10);
+    }
+
+    #[test]
+    fn drop_in_memory_clears_and_duckdb_fallback_works() {
+        let mut store = open_store();
+        store.insert_edge(make_edge(1, 2, "ref:wikilink")).unwrap();
+        store.rebuild_in_memory().unwrap();
+        assert!(store.mem.read().unwrap().is_some());
+
+        store.drop_in_memory();
+        assert!(store.mem.read().unwrap().is_none());
+
+        // DuckDB fallback still returns the edge.
+        let neighbours = store
+            .neighbours(1, Direction::Outgoing, &EdgeFilter::Any)
+            .unwrap();
+        assert_eq!(neighbours.len(), 1);
+    }
+
+    #[test]
+    fn write_through_insert_visible_in_memory() {
+        let mut store = open_store();
+        store.rebuild_in_memory().unwrap(); // start with empty graph in memory
+        store.insert_edge(make_edge(1, 2, "ref:wikilink")).unwrap();
+
+        // Should be visible via in-memory path without another rebuild.
+        let neighbours = store
+            .neighbours(1, Direction::Outgoing, &EdgeFilter::Any)
+            .unwrap();
+        assert_eq!(neighbours.len(), 1);
+    }
+
+    #[test]
+    fn replace_outgoing_write_through() {
+        let mut store = open_store();
+        store.rebuild_in_memory().unwrap();
+        store.insert_edge(make_edge(1, 2, "ref:wikilink")).unwrap();
+        store.insert_edge(make_edge(1, 3, "ref:wikilink")).unwrap();
+        store
+            .replace_outgoing(1, vec![make_edge(1, 99, "ref:wikilink")])
+            .unwrap();
+
+        let neighbours = store
+            .neighbours(1, Direction::Outgoing, &EdgeFilter::Any)
+            .unwrap();
+        assert_eq!(neighbours.len(), 1);
+        assert_eq!(neighbours[0].0, 99);
     }
 }
