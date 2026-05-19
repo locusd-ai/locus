@@ -11,6 +11,7 @@ locus-bitmap = { workspace = true }
 roaring = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+petgraph = "0.7"
 
 [dev-dependencies]
 locus-parser = { workspace = true }

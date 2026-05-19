@@ -311,6 +311,9 @@ pub trait GraphStore: Send + Sync {
     /// All edges incident to a doc (both directions, all kinds).
     fn doc_edges(&self, doc_id: DocId) -> Result<Vec<Edge>, GraphError>;
 
+    /// All resolved edges — used by bulk graph algorithms (PageRank, centrality).
+    fn all_edges(&self) -> Result<Vec<Edge>, GraphError>;
+
     /// Total resolved edge count.
     fn edge_count(&self) -> Result<u64, GraphError>;
 

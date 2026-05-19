@@ -486,6 +486,34 @@ impl GraphStore for DuckDbGraphStore {
         rows.map_err(|e| GraphError::Storage(e.to_string()))
     }
 
+    fn all_edges(&self) -> Result<Vec<Edge>, GraphError> {
+        // Use in-memory graph if available.
+        {
+            let guard = self.mem.read().unwrap();
+            if let Some(ref g) = *guard {
+                let edges: Vec<Edge> = g
+                    .graph
+                    .edge_weights()
+                    .cloned()
+                    .collect();
+                return Ok(edges);
+            }
+        }
+        // Fallback to DuckDB.
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT from_id, to_id, category, kind, weight, byte_offset, created_at
+                 FROM doc_links",
+            )
+            .map_err(|e| GraphError::Storage(e.to_string()))?;
+        let rows: Result<Vec<Edge>, _> = stmt
+            .query_map([], row_to_edge)
+            .map_err(|e| GraphError::Storage(e.to_string()))?
+            .collect();
+        rows.map_err(|e| GraphError::Storage(e.to_string()))
+    }
+
     fn edge_count(&self) -> Result<u64, GraphError> {
         let conn = self.conn();
         let mut stmt = conn
