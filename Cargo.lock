@@ -2631,6 +2631,7 @@ dependencies = [
  "locus-ingest",
  "locus-parser",
  "locus-registry",
+ "petgraph",
  "roaring",
  "serde",
  "serde_json",
@@ -2645,6 +2646,7 @@ version = "0.1.0"
 dependencies = [
  "duckdb",
  "locus-core",
+ "petgraph",
  "serde_json",
  "tempfile",
  "thiserror",

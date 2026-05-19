@@ -228,9 +228,11 @@ Extend BIEM to index codebases using Tree-sitter. **Implemented in WS3.**
 
 ---
 
-## Phase 4 — Graph Layer (Planned)
+## Phase 4 — Graph Layer ✅
 
 Add a link graph alongside the bitmap index and vector store, enabling traversal queries that bitmaps fundamentally cannot answer.
+
+**All Phase 4 modules are implemented and tested.**
 
 ### Why
 
@@ -247,9 +249,9 @@ Bitmaps answer **"which docs match these attributes?"** A graph answers **"how a
 ```
 bitmap pre-filter (16µs)          "tag:concept:auth" → 12 doc IDs
   ↓
-graph expansion                   1-hop neighbours → 47 doc IDs
+graph expansion (~100µs–1ms)      1-hop neighbours → 47 doc IDs
   ↓
-vector rerank                     semantic similarity → top 5 chunks
+vector rerank (~6ms)              semantic similarity → top 5 chunks
 ```
 
 This three-stage pipeline (bitmap → graph → vector) is unique — no other local retrieval tool supports it.
@@ -263,29 +265,43 @@ This three-stage pipeline (bitmap → graph → vector) is unique — no other l
 | Multi-hop traversal | "notes within 2 hops of this concept" | ✗ | ✓ |
 | Centrality | "which notes are structural hubs?" | Approx. (in-degree only) | ✓ (PageRank) |
 | Shortest path | "how are these two topics connected?" | ✗ | ✓ |
-| Dynamic MOC | "generate a map-of-content for this result set" | ✗ | ✓ |
 | Provenance DAG | "what depends on doc 42?" | Partial | ✓ |
 
-### Implementation approach
+### Implementation
 
-The data is nearly free: links are already extracted by the parser and stored as `link:*` bitmaps. The missing piece is a persistent adjacency list.
+**Persistence**: `graph_edges` and `graph_pending_edges` tables in DuckDB (same connection as `DuckDbRegistry`). Typed `Edge { from, to, category, kind, weight, byte_offset }` model. Pending edges resolved when target is later indexed.
 
-1. **Schema**: add `doc_links (from_id u32, to_id u32)` table to DuckDB registry — populated during ingestion alongside existing link bitmap writes
-2. **In-memory graph**: on daemon startup, build a `petgraph::Graph` from the adjacency table (petgraph is already a workspace dependency). Fast rebuild — O(edges), not O(docs)
-3. **Trait**: `GraphQueryEngine` with `traverse(doc_id, hops)`, `centrality()`, `shortest_path(from, to)`, `neighbours(doc_id)`
-4. **Composition**: `BitmapQueryEngine::graph_expand()` takes bitmap results and expands by N hops before passing to vector rerank
-5. **Interface**: `locus graph --from <file> --hops 2`, MCP tool `locus_graph`, HTTP `GET /graph/:doc_id`
+**In-memory cache**: `DuckDbGraphStore` maintains a `petgraph::StableGraph` rebuilt from DuckDB at startup. All writes are write-through (DuckDB + petgraph). Read queries use the fast in-memory path; fallback to DuckDB when not loaded.
 
-### Planned work
-- [ ] Add `doc_links` table to DuckDB schema and populate during ingestion
-- [ ] `GraphStore` trait in `locus-core` + petgraph implementation in `locus-registry`
-- [ ] Daemon startup: rebuild in-memory graph from registry
-- [ ] `graph_expand(doc_ids, hops)` in `BitmapQueryEngine` — compose with bitmap filter
-- [ ] Centrality computation (in-degree, PageRank approximation)
-- [ ] CLI: `locus graph --from <file> [--hops N]`
-- [ ] MCP tool: `locus_graph`
-- [ ] Cognitive features: dynamic MOC generation using graph centrality on a bitmap-filtered result set
-- [ ] Integration test: index vault, verify traversal and centrality results
+**Traits**:
+- `GraphStore` (locus-core) — 14 methods for persistence and read access
+- `GraphQueryEngine` (locus-core) — 6 algorithmic methods: `query`, `expand`, `centrality`, `shortest_path`, `reachable`, `stats`
+
+**Composition**: `SemanticQueryRequest.graph_expand: Option<ExpandSpec>` opts into the graph stage. `BitmapQueryEngine::semantic_query()` runs bitmap → graph expand → vector rerank. `SemanticQueryResult` includes `graph_expanded_to` and `elapsed_graph_us`.
+
+### Completed
+- [x] `GraphStore` trait in `locus-core` with `Edge`, `UnresolvedEdge`, `EdgeFilter`, `ExpandSpec`, `GraphOp`, `CentralityAlgorithm`
+- [x] `DuckDbGraphStore` in `locus-registry`: write-through petgraph + DuckDB, `resolve_pending`, `rebuild_in_memory`
+- [x] `PetgraphQueryEngine` in `locus-query`: BFS expand, BFS shortest_path, DFS reachable, in-degree, out-degree, PageRank
+- [x] Graph edge extraction wired into `IngestionPipeline`: Obsidian→`ref:wikilink`, Code→`dep:import`, unresolved→pending
+- [x] Three-stage pipeline in `BitmapQueryEngine::semantic_query()`: bitmap → graph expand → vector rerank
+- [x] CLI: `locus graph neighbours|expand|path|central|stats`
+- [x] MCP tool: `locus_graph` (operation-dispatched: neighbours, expand, path, central, stats)
+- [x] `locus status` / `locus_status` include graph stats when graph engine is wired
+- [x] Integration tests: ingestion pipeline (6 tests), query engine (5 tests), semantic pipeline (5 tests)
+- [x] Benchmarks: `locus-bench-graph` — rebuild scaling, expansion, centrality, shortest path at 1K–50K edges
+
+### Phase 4 Benchmarks
+
+Run with `cargo run --release --bin locus-bench-graph`. Targets:
+
+| Operation | Scale | Target | Notes |
+|-----------|-------|--------|-------|
+| Graph rebuild | 10K edges | < 100ms | Linear scan of DuckDB rows |
+| 1-hop expand | per query | < 1ms | In-memory BFS |
+| 2-hop expand | per query | < 5ms | In-memory BFS |
+| PageRank | 5K nodes | < 500ms | petgraph::algo::page_rank |
+| Shortest path | per query | < 2ms | BFS with parent map |
 
 ---
 

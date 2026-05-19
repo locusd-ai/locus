@@ -1,6 +1,6 @@
 //! MCP (Model Context Protocol) server for BIEM.
 //!
-//! Exposes 4 tools: locus_search, locus_inspect, locus_status, locus_filters.
+//! Exposes 5 tools: locus_search, locus_inspect, locus_status, locus_filters, locus_graph.
 //! Runs over stdio transport for integration with LLM clients.
 
 use std::sync::Arc;
@@ -13,6 +13,10 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use locus_core::graph::{
+    CentralityAlgorithm, Direction, EdgeFilter, ExpandSpec, GraphOp, GraphQueryEngine,
+    GraphQueryRequest,
+};
 use locus_core::query::{Filter, QueryEngine, QueryRequest};
 
 // ── Tool parameter types ─────────────────────────────────────────
@@ -49,20 +53,54 @@ pub struct FiltersParams {
     pub category: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GraphParams {
+    /// Operation: "neighbours", "expand", "path", "central", "stats"
+    pub operation: String,
+    /// Source doc ID (required for neighbours, expand, path)
+    pub doc_id: Option<u32>,
+    /// Target doc ID (required for path)
+    pub to_doc_id: Option<u32>,
+    /// Number of hops for expand (default 1)
+    #[serde(default = "default_hops")]
+    pub hops: u8,
+    /// Traversal direction: "outgoing" (default), "incoming", "both"
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    /// Centrality algorithm: "pagerank" (default), "indegree", "outdegree"
+    #[serde(default = "default_algorithm")]
+    pub algorithm: String,
+    /// Maximum results (default 10)
+    #[serde(default = "default_k")]
+    pub k: u32,
+}
+
+fn default_hops() -> u8 { 1 }
+fn default_direction() -> String { "outgoing".into() }
+fn default_algorithm() -> String { "pagerank".into() }
+fn default_k() -> u32 { 10 }
+
 // ── MCP Server ───────────────────────────────────────────────────
 
 /// The BIEM MCP server handler.
 ///
 /// Delegates all read/query operations to a `dyn QueryEngine`.
+/// Optionally wired with a `GraphQueryEngine` for graph traversal tools.
 pub struct BiemMcpServer {
     engine: Arc<dyn QueryEngine>,
+    graph: Option<Arc<dyn GraphQueryEngine>>,
     tool_router: ToolRouter<Self>,
 }
 
 impl BiemMcpServer {
     pub fn new(engine: Arc<dyn QueryEngine>) -> Self {
         let tool_router = Self::tool_router();
-        Self { engine, tool_router }
+        Self { engine, graph: None, tool_router }
+    }
+
+    pub fn with_graph(mut self, g: Arc<dyn GraphQueryEngine>) -> Self {
+        self.graph = Some(g);
+        self
     }
 }
 
@@ -116,10 +154,21 @@ impl BiemMcpServer {
     }
 
     /// Get Locus index status: document count, bitmap count, tombstone count.
+    /// Includes graph statistics when a graph engine is wired.
     #[tool(name = "locus_status", description = "Get Locus index status")]
     fn status(&self) -> String {
         match self.engine.status() {
-            Ok(s) => serde_json::to_string(&s).unwrap_or_else(|e| format!(r#"{{"error":"{}"}}"#, e)),
+            Ok(s) => {
+                let mut val = serde_json::to_value(&s).unwrap_or_default();
+                if let Some(g) = &self.graph {
+                    if let Ok(gs) = g.stats() {
+                        if let Ok(gv) = serde_json::to_value(&gs) {
+                            val["graph"] = gv;
+                        }
+                    }
+                }
+                val.to_string()
+            }
             Err(e) => format!(r#"{{"error":"{}"}}"#, e),
         }
     }
@@ -131,6 +180,108 @@ impl BiemMcpServer {
         let params = params.0;
         match self.engine.list_filter_keys(params.category.as_deref()) {
             Ok(entries) => serde_json::to_string(&entries).unwrap_or_else(|e| format!(r#"{{"error":"{}"}}"#, e)),
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e),
+        }
+    }
+
+    /// Graph traversal and centrality queries. Operations:
+    /// - "neighbours": direct neighbours of doc_id (optional direction)
+    /// - "expand": multi-hop expansion from doc_id (hops, direction)
+    /// - "path": shortest path from doc_id to to_doc_id
+    /// - "central": top-k nodes by centrality (algorithm, k)
+    /// - "stats": graph statistics (node/edge counts by category)
+    #[tool(name = "locus_graph", description = "Graph traversal and centrality queries")]
+    fn graph_query(&self, params: Parameters<GraphParams>) -> String {
+        let params = params.0;
+
+        let Some(engine) = &self.graph else {
+            return r#"{"error":"graph engine not wired — start locusd with graph support"}"#
+                .into();
+        };
+
+        let direction = match params.direction.as_str() {
+            "incoming" | "in" => Direction::Incoming,
+            "both" => Direction::Both,
+            _ => Direction::Outgoing,
+        };
+
+        let result: Result<serde_json::Value, String> = match params.operation.as_str() {
+            "neighbours" => {
+                let Some(doc_id) = params.doc_id else {
+                    return r#"{"error":"doc_id required for neighbours"}"#.into();
+                };
+                engine
+                    .query(GraphQueryRequest {
+                        op: GraphOp::Neighbours { from: doc_id, direction },
+                        edge_filter: EdgeFilter::Any,
+                        limit: Some(params.k),
+                    })
+                    .map(|r| serde_json::to_value(&r).unwrap_or_default())
+                    .map_err(|e| e.to_string())
+            }
+            "expand" => {
+                let Some(doc_id) = params.doc_id else {
+                    return r#"{"error":"doc_id required for expand"}"#.into();
+                };
+                let spec = ExpandSpec {
+                    hops: params.hops,
+                    direction,
+                    edge_filter: EdgeFilter::Any,
+                    max_nodes: Some(500),
+                    include_seeds: false,
+                };
+                engine
+                    .query(GraphQueryRequest {
+                        op: GraphOp::Expand { seeds: vec![doc_id], spec },
+                        edge_filter: EdgeFilter::Any,
+                        limit: None,
+                    })
+                    .map(|r| serde_json::to_value(&r).unwrap_or_default())
+                    .map_err(|e| e.to_string())
+            }
+            "path" => {
+                let Some(from_id) = params.doc_id else {
+                    return r#"{"error":"doc_id required for path"}"#.into();
+                };
+                let Some(to_id) = params.to_doc_id else {
+                    return r#"{"error":"to_doc_id required for path"}"#.into();
+                };
+                engine
+                    .shortest_path(from_id, to_id, &EdgeFilter::Any)
+                    .map(|ids| serde_json::json!({ "path": ids }))
+                    .map_err(|e| e.to_string())
+            }
+            "central" => {
+                let algo = match params.algorithm.as_str() {
+                    "indegree" | "in" => CentralityAlgorithm::InDegree,
+                    "outdegree" | "out" => CentralityAlgorithm::OutDegree,
+                    _ => CentralityAlgorithm::PageRank { iterations: 100, damping: 0.85 },
+                };
+                engine
+                    .centrality(algo, None)
+                    .map(|scores| {
+                        let top: Vec<_> = scores
+                            .into_iter()
+                            .take(params.k as usize)
+                            .map(|(id, score)| serde_json::json!({ "doc_id": id, "score": score }))
+                            .collect();
+                        serde_json::json!({ "nodes": top })
+                    })
+                    .map_err(|e| e.to_string())
+            }
+            "stats" => engine
+                .stats()
+                .map(|s| serde_json::to_value(&s).unwrap_or_default())
+                .map_err(|e| e.to_string()),
+            other => {
+                return format!(
+                    r#"{{"error":"unknown operation '{other}'. Valid: neighbours, expand, path, central, stats"}}"#
+                )
+            }
+        };
+
+        match result {
+            Ok(v) => v.to_string(),
             Err(e) => format!(r#"{{"error":"{}"}}"#, e),
         }
     }
@@ -287,5 +438,52 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["key"], "tag:work");
         assert_eq!(entries[0]["cardinality"], 2);
+    }
+
+    #[test]
+    fn test_graph_tool_returns_error_when_not_wired() {
+        let server = make_server(); // no .with_graph()
+        let result = server.graph_query(Parameters(GraphParams {
+            operation: "stats".into(),
+            doc_id: None,
+            to_doc_id: None,
+            hops: 1,
+            direction: "outgoing".into(),
+            algorithm: "pagerank".into(),
+            k: 10,
+        }));
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string(), "expected error when graph not wired");
+    }
+
+    #[test]
+    fn test_graph_tool_any_op_without_engine_returns_error() {
+        // graph not wired → all operations return error regardless of op name
+        let server = make_server();
+        for op in &["bogus", "neighbours", "stats"] {
+            let result = server.graph_query(Parameters(GraphParams {
+                operation: op.to_string(),
+                doc_id: None,
+                to_doc_id: None,
+                hops: 1,
+                direction: "outgoing".into(),
+                algorithm: "pagerank".into(),
+                k: 10,
+            }));
+            let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert!(
+                json["error"].is_string(),
+                "expected error JSON for op '{op}' when graph not wired"
+            );
+        }
+    }
+
+    #[test]
+    fn test_status_includes_no_graph_key_when_not_wired() {
+        let server = make_server();
+        let result = server.status();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["total_documents"], 2);
+        assert!(json.get("graph").is_none(), "graph key should be absent when not wired");
     }
 }

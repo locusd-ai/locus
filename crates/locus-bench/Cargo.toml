@@ -31,3 +31,7 @@ path = "src/bin/locus_scale_test.rs"
 [[bin]]
 name = "locus-bench-phase2"
 path = "src/bin/locus_bench_phase2.rs"
+
+[[bin]]
+name = "locus-bench-graph"
+path = "src/bin/locus_bench_graph.rs"

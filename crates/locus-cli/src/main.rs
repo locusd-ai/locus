@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -8,6 +9,10 @@ use locus_bitmap::lmdb::LmdbBitmapStore;
 use locus_bitmap::memory::InMemoryBitmapStore;
 use locus_core::bitmap::BitmapStore;
 use locus_core::config::{self, StorageMode};
+use locus_core::graph::{
+    CentralityAlgorithm, Direction, EdgeCategory, EdgeFilter, ExpandSpec, GraphOp,
+    GraphQueryEngine, GraphQueryRequest, GraphStore,
+};
 use locus_core::query::{Filter, QueryEngine, QueryRequest};
 use locus_core::registry::Registry;
 use locus_core::semantic::Embedder;
@@ -19,8 +24,10 @@ use locus_ingest::IngestionPipeline;
 use locus_parser::markdown::MarkdownParser;
 use locus_code::CodeParser;
 use locus_query::BitmapQueryEngine;
+use locus_query::PetgraphQueryEngine;
 use locus_query::SemanticQueryRequest;
 use locus_registry::duckdb::DuckDbRegistry;
+use locus_registry::graph::DuckDbGraphStore;
 use locus_registry::memory::InMemoryRegistry;
 
 #[derive(Parser)]
@@ -123,6 +130,70 @@ enum Commands {
         #[arg(long, default_value = "5")]
         top_k: usize,
     },
+    /// Graph traversal and analysis
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum GraphCommands {
+    /// Show direct neighbours of a file in the link graph
+    Neighbours {
+        /// File to query neighbours for
+        path: PathBuf,
+        /// Show incoming edges (backlinks) instead of outgoing
+        #[arg(long)]
+        incoming: bool,
+        /// Show both incoming and outgoing edges
+        #[arg(long)]
+        both: bool,
+        /// Filter by edge category: reference, dependency, hierarchy, workflow, provenance
+        #[arg(long)]
+        category: Option<String>,
+        /// Maximum number of neighbours to show
+        #[arg(long, default_value = "20")]
+        limit: u32,
+    },
+    /// Multi-hop expansion from a file
+    Expand {
+        /// Starting file
+        path: PathBuf,
+        /// Number of hops to traverse
+        #[arg(long, default_value = "1")]
+        hops: u8,
+        /// Traversal direction: outgoing, incoming, both
+        #[arg(long, default_value = "outgoing")]
+        direction: String,
+        /// Filter by edge category
+        #[arg(long)]
+        category: Option<String>,
+        /// Maximum nodes to include
+        #[arg(long)]
+        max_nodes: Option<u32>,
+    },
+    /// Shortest path between two files
+    Path {
+        /// Source file
+        from: PathBuf,
+        /// Target file
+        to: PathBuf,
+        /// Filter by edge category
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Top documents by centrality score
+    Central {
+        /// Centrality algorithm: pagerank, indegree, outdegree
+        #[arg(long, default_value = "pagerank")]
+        algorithm: String,
+        /// Number of top documents to return
+        #[arg(long, default_value = "10")]
+        limit: u32,
+    },
+    /// Graph statistics
+    Stats,
 }
 
 fn main() -> Result<()> {
@@ -144,6 +215,7 @@ fn main() -> Result<()> {
         Commands::Taggers => cmd_taggers(),
         Commands::Enrich { ref path, force } => cmd_enrich(path, force, &cli),
         Commands::Semantic { ref query, ref filter, top_k } => cmd_semantic(query, filter, top_k, &cli),
+        Commands::Graph { ref command } => cmd_graph(command, &cli),
     }
 }
 
@@ -671,6 +743,237 @@ fn cmd_taggers() -> Result<()> {
     println!("Active taggers ({}):", names.len());
     for name in names {
         println!("  • {name}");
+    }
+
+    Ok(())
+}
+
+// ── Graph CLI ─────────────────────────────────────────────────────
+
+fn open_graph_store(data_dir: &PathBuf) -> Result<(DuckDbRegistry, DuckDbGraphStore)> {
+    let db_path = data_dir.join("registry.duckdb");
+    let registry = DuckDbRegistry::new(db_path.to_str().unwrap())
+        .context("failed to open DuckDB registry")?;
+    let gs = DuckDbGraphStore::new(registry.connection());
+    Ok((registry, gs))
+}
+
+fn lookup_doc_id(registry: &DuckDbRegistry, path: &PathBuf) -> Result<u32> {
+    let canonical = path.canonicalize()
+        .with_context(|| format!("path not found: {}", path.display()))?;
+    let doc = registry.lookup_by_path(&canonical)?
+        .or_else(|| registry.lookup_by_path(path).ok().flatten())
+        .with_context(|| format!("not indexed: {}", path.display()))?;
+    Ok(doc.doc_id)
+}
+
+fn doc_path_str(registry: &DuckDbRegistry, doc_id: u32) -> String {
+    match registry.lookup_by_id(doc_id) {
+        Ok(Some(doc)) => doc.file_path.display().to_string(),
+        _ => format!("[doc:{doc_id}]"),
+    }
+}
+
+fn parse_edge_filter(category: Option<&str>) -> Result<EdgeFilter> {
+    match category {
+        None => Ok(EdgeFilter::Any),
+        Some(s) => {
+            let cat: EdgeCategory = s.parse().map_err(|_| {
+                anyhow::anyhow!(
+                    "unknown category '{s}'. Valid: reference, dependency, hierarchy, workflow, provenance"
+                )
+            })?;
+            Ok(EdgeFilter::Category(cat))
+        }
+    }
+}
+
+fn parse_direction(s: &str) -> Result<Direction> {
+    match s {
+        "outgoing" | "out" => Ok(Direction::Outgoing),
+        "incoming" | "in" => Ok(Direction::Incoming),
+        "both" => Ok(Direction::Both),
+        other => Err(anyhow::anyhow!(
+            "unknown direction '{other}'. Valid: outgoing, incoming, both"
+        )),
+    }
+}
+
+fn cmd_graph(command: &GraphCommands, cli: &Cli) -> Result<()> {
+    let data_dir = resolve_data_dir(cli)?;
+    if !data_dir.exists() {
+        anyhow::bail!(
+            "data dir {} does not exist — run `locus init <vault>` first",
+            data_dir.display()
+        );
+    }
+
+    let (registry, mut gs) = open_graph_store(&data_dir)?;
+    gs.rebuild_in_memory().context("failed to rebuild graph index")?;
+    let gs_arc: Arc<dyn GraphStore> = Arc::new(gs);
+    let engine = PetgraphQueryEngine::new(gs_arc.clone());
+
+    match command {
+        GraphCommands::Stats => {
+            let stats = gs_arc.stats().map_err(|e| anyhow::anyhow!(e))?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                println!("Graph Statistics");
+                println!("  nodes:  {}", stats.node_count);
+                println!("  edges:  {}", stats.edge_count);
+                if !stats.edges_by_category.is_empty() {
+                    println!("  by category:");
+                    let mut cats: Vec<_> = stats.edges_by_category.iter().collect();
+                    cats.sort_by_key(|(k, _)| k.as_str());
+                    for (cat, count) in cats {
+                        println!("    {cat}: {count}");
+                    }
+                }
+            }
+        }
+
+        GraphCommands::Neighbours { path, incoming, both, category, limit } => {
+            let doc_id = lookup_doc_id(&registry, path)?;
+            let direction = if *both {
+                Direction::Both
+            } else if *incoming {
+                Direction::Incoming
+            } else {
+                Direction::Outgoing
+            };
+            let edge_filter = parse_edge_filter(category.as_deref())?;
+
+            let result = engine
+                .query(GraphQueryRequest {
+                    op: GraphOp::Neighbours { from: doc_id, direction },
+                    edge_filter,
+                    limit: Some(*limit),
+                })
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{} neighbour(s) of {}:", result.nodes.len(), path.display());
+                for node in &result.nodes {
+                    let node_path = if node.file_path.as_os_str().is_empty() {
+                        doc_path_str(&registry, node.doc_id)
+                    } else {
+                        node.file_path.display().to_string()
+                    };
+                    println!("  {} {}", node.doc_id, node_path);
+                }
+                for edge in &result.edges {
+                    println!("  {} -> {} ({})", edge.from, edge.to, edge.kind);
+                }
+            }
+        }
+
+        GraphCommands::Expand { path, hops, direction, category, max_nodes } => {
+            let doc_id = lookup_doc_id(&registry, path)?;
+            let dir = parse_direction(direction)?;
+            let edge_filter = parse_edge_filter(category.as_deref())?;
+            let spec = ExpandSpec {
+                hops: *hops,
+                direction: dir,
+                edge_filter: edge_filter.clone(),
+                max_nodes: *max_nodes,
+                include_seeds: false,
+            };
+
+            let result = engine
+                .query(GraphQueryRequest {
+                    op: GraphOp::Expand { seeds: vec![doc_id], spec },
+                    edge_filter,
+                    limit: None,
+                })
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!(
+                    "{} nodes reachable from {} ({} hop(s), {:?}):",
+                    result.nodes.len(),
+                    path.display(),
+                    hops,
+                    dir,
+                );
+                for node in &result.nodes {
+                    let node_path = if node.file_path.as_os_str().is_empty() {
+                        doc_path_str(&registry, node.doc_id)
+                    } else {
+                        node.file_path.display().to_string()
+                    };
+                    let hop_str = node
+                        .hop_distance
+                        .map(|h| format!(" (hop {h})"))
+                        .unwrap_or_default();
+                    println!("  {node_path}{hop_str}");
+                }
+            }
+        }
+
+        GraphCommands::Path { from, to, category } => {
+            let from_id = lookup_doc_id(&registry, from)?;
+            let to_id = lookup_doc_id(&registry, to)?;
+            let edge_filter = parse_edge_filter(category.as_deref())?;
+
+            let path_ids = engine
+                .shortest_path(from_id, to_id, &edge_filter)
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            if cli.json {
+                let nodes: Vec<_> = path_ids
+                    .iter()
+                    .map(|&id| {
+                        serde_json::json!({ "doc_id": id, "path": doc_path_str(&registry, id) })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&nodes)?);
+            } else {
+                println!("Shortest path: {} hop(s)", path_ids.len().saturating_sub(1));
+                for id in &path_ids {
+                    println!("  {}", doc_path_str(&registry, *id));
+                }
+            }
+        }
+
+        GraphCommands::Central { algorithm, limit } => {
+            let algo = match algorithm.as_str() {
+                "pagerank" | "pr" => CentralityAlgorithm::PageRank { iterations: 100, damping: 0.85 },
+                "indegree" | "in" => CentralityAlgorithm::InDegree,
+                "outdegree" | "out" => CentralityAlgorithm::OutDegree,
+                other => anyhow::bail!(
+                    "unknown algorithm '{other}'. Valid: pagerank, indegree, outdegree"
+                ),
+            };
+
+            let scores = engine
+                .centrality(algo, None)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let limited: Vec<_> = scores.into_iter().take(*limit as usize).collect();
+
+            if cli.json {
+                let out: Vec<_> = limited
+                    .iter()
+                    .map(|(id, score)| {
+                        serde_json::json!({
+                            "doc_id": id,
+                            "path": doc_path_str(&registry, *id),
+                            "score": score,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                println!("Top {} by {} centrality:", limited.len(), algorithm);
+                for (i, (id, score)) in limited.iter().enumerate() {
+                    println!("  {:2}. {:.4}  {}", i + 1, score, doc_path_str(&registry, *id));
+                }
+            }
+        }
     }
 
     Ok(())
