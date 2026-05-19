@@ -1,10 +1,12 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use roaring::RoaringBitmap;
 use tracing::instrument;
 
 use locus_core::bitmap::BitmapStore;
+use locus_core::graph::{GraphQueryEngine, ExpandSpec};
 use locus_core::query::{
     ChunkPointer, Filter, FilterEntry, IndexStatus, InspectResult as QueryInspectResult,
     MatchPointer, QueryEngine, QueryError, QueryRequest, QueryResult,
@@ -20,6 +22,7 @@ use locus_core::types::BitmapCategory;
 pub struct BitmapQueryEngine {
     bitmap_store: Box<dyn BitmapStore>,
     registry: Box<dyn Registry>,
+    graph: Option<Arc<dyn GraphQueryEngine>>,
 }
 
 impl BitmapQueryEngine {
@@ -27,6 +30,27 @@ impl BitmapQueryEngine {
         Self {
             bitmap_store,
             registry,
+            graph: None,
+        }
+    }
+
+    /// Attach a graph query engine for the three-stage pipeline.
+    pub fn with_graph(mut self, g: Arc<dyn GraphQueryEngine>) -> Self {
+        self.graph = Some(g);
+        self
+    }
+
+    /// Expand a seed bitmap via the graph layer (if wired); returns seeds unchanged if not.
+    pub fn graph_expand(
+        &self,
+        seeds: &RoaringBitmap,
+        spec: &ExpandSpec,
+    ) -> Result<RoaringBitmap, QueryError> {
+        match &self.graph {
+            Some(g) => g
+                .expand(seeds, spec)
+                .map_err(|e| QueryError::Semantic(e.to_string())),
+            None => Ok(seeds.clone()),
         }
     }
 
@@ -200,16 +224,29 @@ impl BitmapQueryEngine {
             return Ok(SemanticQueryResult {
                 pointers: vec![],
                 bitmap_candidates: 0,
+                graph_expanded_to: request.graph_expand.as_ref().map(|_| 0u32),
                 vector_searched: 0,
                 elapsed_bitmap_us,
+                elapsed_graph_us: 0,
                 elapsed_vector_us: 0,
                 elapsed_rerank_us: 0,
             });
         }
 
+        // Phase 1b: optional graph expand (bitmap pre-filter → graph expand)
+        let graph_start = Instant::now();
+        let (candidates, graph_expanded_to) = if let Some(ref spec) = request.graph_expand {
+            let expanded = self.graph_expand(&matching, spec)?;
+            let count = expanded.len() as u32;
+            (expanded, Some(count))
+        } else {
+            (matching, None)
+        };
+        let elapsed_graph_us = graph_start.elapsed().as_micros() as u64;
+
         // Phase 2: collect all chunk IDs for matching docs
         let mut candidate_chunk_ids: Vec<u32> = Vec::new();
-        for doc_id in matching.iter() {
+        for doc_id in candidates.iter() {
             if let Ok(chunks) = self.registry.get_chunks(doc_id) {
                 for c in chunks {
                     candidate_chunk_ids.push(c.chunk_id);
@@ -243,7 +280,7 @@ impl BitmapQueryEngine {
                 // content from source files using registry metadata.
                 let mut rerank_candidates: Vec<(u32, String)> = Vec::new();
                 for &(chunk_id, _) in &scored_chunks {
-                    if let Some(text) = self.resolve_chunk_text(chunk_id, &matching) {
+                    if let Some(text) = self.resolve_chunk_text(chunk_id, &candidates) {
                         rerank_candidates.push((chunk_id, text));
                     }
                 }
@@ -275,7 +312,7 @@ impl BitmapQueryEngine {
         for (chunk_id, score) in final_scored {
             // Find the doc that owns this chunk
             let mut owner_doc_id = None;
-            for doc_id in matching.iter() {
+            for doc_id in candidates.iter() {
                 if let Ok(chunks) = self.registry.get_chunks(doc_id) {
                     if chunks.iter().any(|c| c.chunk_id == chunk_id) {
                         owner_doc_id = Some(doc_id);
@@ -299,8 +336,10 @@ impl BitmapQueryEngine {
         Ok(SemanticQueryResult {
             pointers,
             bitmap_candidates,
+            graph_expanded_to,
             vector_searched,
             elapsed_bitmap_us,
+            elapsed_graph_us,
             elapsed_vector_us,
             elapsed_rerank_us,
         })

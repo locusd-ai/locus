@@ -557,6 +557,7 @@ fn cmd_semantic(query: &str, filter_keys: &[String], top_k: usize, cli: &Cli) ->
         query_text: query.to_string(),
         top_k,
         rerank: false,
+        graph_expand: None,
     };
 
     // Initialize embedder and vector store

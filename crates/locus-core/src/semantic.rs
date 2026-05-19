@@ -1,5 +1,6 @@
 //! Semantic layer types and traits — embeddings, vector search, reranking.
 
+use crate::graph::ExpandSpec;
 use crate::query::{Filter, MatchPointer};
 use crate::types::ChunkId;
 
@@ -35,6 +36,10 @@ pub struct SemanticQueryRequest {
     pub top_k: usize,
     /// Whether to apply reranker after vector search.
     pub rerank: bool,
+    /// Optional graph expand stage between bitmap filter and vector search.
+    /// If set and a `GraphQueryEngine` is wired into the query engine, the bitmap
+    /// result is expanded by following edges up to `spec.hops` hops.
+    pub graph_expand: Option<ExpandSpec>,
 }
 
 /// Result of a semantic query.
@@ -43,10 +48,14 @@ pub struct SemanticQueryResult {
     pub pointers: Vec<ScoredPointer>,
     /// How many docs the bitmap filter returned.
     pub bitmap_candidates: u32,
+    /// How many docs remained after graph expansion (None if graph disabled).
+    pub graph_expanded_to: Option<u32>,
     /// How many chunks were vector-searched.
     pub vector_searched: u32,
     /// Bitmap filter time in microseconds.
     pub elapsed_bitmap_us: u64,
+    /// Graph expand time in microseconds (0 if graph disabled).
+    pub elapsed_graph_us: u64,
     /// Vector search time in microseconds.
     pub elapsed_vector_us: u64,
     /// Reranker time in microseconds (0 if not used).

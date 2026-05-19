@@ -273,6 +273,7 @@ fn bench_semantic_query(n: usize) -> (u64, u64, u64) {
         query_text: "find relevant notes about work projects".into(),
         top_k: 10,
         rerank: false,
+        graph_expand: None,
     };
 
     // Warm up
