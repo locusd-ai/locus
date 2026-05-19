@@ -2525,6 +2525,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "locus-confluence"
+version = "0.1.0"
+dependencies = [
+ "locus-core",
+ "locus-watcher",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "locus-core"
 version = "0.1.0"
 dependencies = [
@@ -2612,6 +2625,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "locus-jira"
+version = "0.1.0"
+dependencies = [
+ "locus-core",
+ "locus-watcher",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "locus-parser"
 version = "0.1.0"
 dependencies = [
@@ -2649,6 +2675,19 @@ dependencies = [
  "petgraph",
  "serde_json",
  "tempfile",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "locus-slack"
+version = "0.1.0"
+dependencies = [
+ "locus-core",
+ "locus-watcher",
+ "reqwest",
+ "serde",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

@@ -1,6 +1,6 @@
 # Locus Roadmap
 
-> Status: **Phase 1 — Complete**
+> Status: **Phase 5 — Complete**
 > Reference: `001-system-overview.md` for architecture details
 
 ## Phase 1 — Obsidian Core ✅
@@ -305,11 +305,11 @@ Run with `cargo run --release --bin locus-bench-graph`. Targets:
 
 ---
 
-## Phase 5 — Extended Sources (Future)
+## Phase 5 — Extended Sources ✅
 
 Support non-filesystem sources.
 
-### Workstream 1: Parser Extensibility (Prerequisite)
+### Workstream 1: Parser Extensibility ✅
 
 The `Parser` trait is clean and pluggable, but several closed enums in `locus-core` block third-party parsers from expressing a genuinely new source type without forking core. This workstream opens those seams before any new sources are added.
 
@@ -325,19 +325,22 @@ The `Parser` trait is clean and pluggable, but several closed enums in `locus-co
 - `infer_source_type` currently uses a `lang:` tag heuristic. Instead, parsers should signal their source type by emitting a `source:<name>` string in `ParseResult.tags`; the pipeline reads that tag and resolves `SourceType::Custom(name)`.
 - `source_key` and `type_key` match arms need `Custom(s)` branches.
 
-**Planned work:**
-- [ ] Add `SourceType::Custom(String)` and `DocType::Custom(String)` to `locus-core/src/types.rs`
-- [ ] Update `infer_source_type` in `locus-ingest`: read `source:*` tag from `ParseResult.tags` → `SourceType::Custom`; fall back to heuristic only if absent
-- [ ] Update `source_key` / `type_key` match arms in `locus-ingest/src/pipeline.rs`
-- [ ] Update `003-contracts.md` and `001-system-overview.md` to reflect open types
-- [ ] Add `docs/parsers.md` — guide covering: `Parser` trait, `ParseResult` fields, bitmap key naming conventions (`tag:`, `source:`, `kind:`, `lang:`), and a minimal worked example
+**Completed work:**
+- [x] Add `SourceType::Custom(String)` and `DocType::Custom(String)` to `locus-core/src/types.rs`
+- [x] Update `infer_source_type` in `locus-ingest`: read `source:*` tag from `ParseResult.tags` → `SourceType::Custom`; fall back to heuristic only if absent
+- [x] Update `source_key` / `type_key` match arms in `locus-ingest/src/pipeline.rs`
+- [x] Update `003-contracts.md` and `001-system-overview.md` to reflect open types
+- [x] Add `docs/parsers.md` — guide covering: `Parser` trait, `ParseResult` fields, bitmap key naming conventions (`tag:`, `source:`, `kind:`, `lang:`), and a minimal worked example
 
-### Workstream 2: New Source Feeds
+### Workstream 2: New Source Feeds ✅
 
-- [ ] SourceFeed implementations: Confluence, Jira, Slack
-- [ ] Webhook/polling-based ingestion
-- [ ] Source-specific parsers (each emits `source:<name>` to signal type)
-- [ ] Unified cross-source queries (`tag:work AND source:confluence`)
+- [x] `RemoteSource` trait + `RemoteIngestionLoop` in `locus-watcher::remote`
+- [x] `IngestionPipeline::upsert_document(path, bytes)` for content-first ingestion
+- [x] `locus-confluence`: `ConfluenceParser` (storage HTML → sections) + `ConfluenceSource` (REST API polling)
+- [x] `locus-jira`: `JiraParser` (ADF description → chunks) + `JiraSource` (JQL search + REST fetch)
+- [x] `locus-slack`: `SlackParser` (message bundles, thread inlining) + `SlackSource` (conversations.history polling)
+- [x] `POST /v1/webhook/ingest` push endpoint in `locus-daemon::webhook`
+- [x] Unified cross-source queries (`tag:work AND source:confluence`) — works via bitmap layer
 
 ---
 

@@ -26,6 +26,7 @@ use rmcp::ServiceExt;
 
 mod http;
 mod mcp;
+mod webhook;
 
 #[derive(Parser)]
 #[command(name = "locusd", about = "Locus daemon — watcher, ingestion, and query server")]
@@ -60,6 +61,10 @@ struct Cli {
     /// HTTP API port (default: 3141)
     #[arg(long, default_value = "3141")]
     port: u16,
+
+    /// Enable webhook endpoint for push-based remote ingestion
+    #[arg(long)]
+    webhook: bool,
 }
 
 #[tokio::main]
@@ -141,7 +146,26 @@ async fn main() -> Result<()> {
         // Launch HTTP server (background task if also running MCP)
         if cli.http {
             let addr = format!("0.0.0.0:{}", cli.port);
-            let app = http::router(engine.clone());
+            let mut app = http::router(engine.clone());
+
+            // Merge webhook router if --webhook is set; uses a fresh pipeline instance
+            if cli.webhook {
+                let data_dir = data_dir_resolved.clone();
+                let db_path = data_dir.join("registry.duckdb");
+                let lmdb_path = data_dir.join("bitmaps.lmdb");
+                let wh_registry: Box<dyn locus_core::registry::Registry> = Box::new(
+                    DuckDbRegistry::new(db_path.to_str().unwrap())
+                        .context("failed to open DuckDB for webhook pipeline")?,
+                );
+                let wh_bitmap: Box<dyn locus_core::bitmap::BitmapStore> = Box::new(
+                    LmdbBitmapStore::new(&lmdb_path)
+                        .context("failed to open LMDB for webhook pipeline")?,
+                );
+                let wh_pipeline = IngestionPipeline::new(all_parsers(), wh_registry, wh_bitmap);
+                let wh_state = std::sync::Arc::new(std::sync::Mutex::new(wh_pipeline));
+                app = app.merge(webhook::router(wh_state));
+                info!("webhook endpoint enabled at POST /v1/webhook/ingest");
+            }
             let listener = tokio::net::TcpListener::bind(&addr).await
                 .with_context(|| format!("failed to bind HTTP on {addr}"))?;
             info!(addr = %addr, "starting HTTP API server");

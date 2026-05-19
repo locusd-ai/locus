@@ -1,0 +1,14 @@
+[package]
+name = "locus-slack"
+description = "Slack source and parser for Locus"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+locus-core = { workspace = true }
+locus-watcher = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

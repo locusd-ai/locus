@@ -262,6 +262,131 @@ impl IngestionPipeline {
         }
     }
 
+    /// Upsert a document from raw bytes — insert if new, update if changed, skip if unchanged.
+    ///
+    /// This is the entry point for remote sources (Confluence, Jira, Slack) that
+    /// supply content directly rather than via filesystem paths.
+    /// The `path` is a synthetic stable identifier (e.g. `confluence://SPACE/123.confluence`).
+    #[instrument(skip(self, content), fields(path = %path.display()))]
+    pub fn upsert_document(&mut self, path: PathBuf, content: Vec<u8>) -> Result<IngestResult, IngestError> {
+        let parser = self
+            .find_parser(&path)
+            .ok_or_else(|| IngestError::NoParser(path.clone()))?;
+
+        let hash = blake3::hash(&content);
+
+        // Check for existing doc at this path
+        let existing = self.registry.lookup_by_path(&path)?;
+
+        match existing {
+            None => {
+                // New document — insert
+                let result = parser.parse(&path, &content)?;
+                let source = Self::infer_source_type(&result);
+
+                let doc_id = self.registry.insert_doc(NewDoc {
+                    file_path: path.clone(),
+                    source_type: source.clone(),
+                    blake3_hash: *hash.as_bytes(),
+                    auto_type: result.auto_type.clone(),
+                })?;
+
+                let chunks = Self::chunks_to_new(doc_id, &result);
+                self.registry.replace_chunks(doc_id, chunks)?;
+
+                let keys = self.enriched_bitmap_keys(&path, &content, &source, &result);
+                let mut updated = 0u32;
+                for key in &keys {
+                    self.bitmap_store.insert_id(key, doc_id)?;
+                    updated += 1;
+                }
+
+                let chunk_ids: Vec<u32> = self.registry.get_chunks(doc_id)?
+                    .iter().map(|c| c.chunk_id).collect();
+                self.embed_chunks(&content, &result, &chunk_ids);
+
+                if self.graph_store.is_some() {
+                    let ts = Self::now_secs();
+                    let (resolved, unresolved) =
+                        Self::build_edge_lists(&*self.registry, doc_id, &source, &result, ts);
+                    Self::graph_write_new(
+                        self.graph_store.as_deref_mut().unwrap(),
+                        doc_id,
+                        &path,
+                        resolved,
+                        unresolved,
+                    );
+                }
+
+                info!(doc_id, bitmaps = updated, "upserted new remote document");
+                Ok(IngestResult { action: IngestAction::Indexed, bitmaps_updated: updated })
+            }
+
+            Some(doc_record) => {
+                // Existing document — skip if hash unchanged
+                if doc_record.blake3_hash == *hash.as_bytes() {
+                    return Ok(IngestResult { action: IngestAction::Skipped, bitmaps_updated: 0 });
+                }
+
+                let result = parser.parse(&path, &content)?;
+                let source = Self::infer_source_type(&result);
+
+                let new_keys: HashSet<BitmapKey> =
+                    self.enriched_bitmap_keys(&path, &content, &source, &result).into_iter().collect();
+
+                let all_existing_keys = self.bitmap_store.list_keys(None)?;
+                let old_keys: HashSet<BitmapKey> = all_existing_keys
+                    .into_iter()
+                    .filter(|k| {
+                        self.bitmap_store
+                            .get(k)
+                            .map(|bm| bm.contains(doc_record.doc_id))
+                            .unwrap_or(false)
+                    })
+                    .collect();
+
+                let removed: Vec<_> = old_keys.difference(&new_keys).cloned().collect();
+                for key in &removed {
+                    self.bitmap_store.remove_id(key, doc_record.doc_id)?;
+                }
+                let added: Vec<_> = new_keys.difference(&old_keys).cloned().collect();
+                for key in &added {
+                    self.bitmap_store.insert_id(key, doc_record.doc_id)?;
+                }
+
+                self.registry.update_doc(
+                    doc_record.doc_id,
+                    *hash.as_bytes(),
+                    result.auto_type.clone(),
+                )?;
+                let chunks = Self::chunks_to_new(doc_record.doc_id, &result);
+                self.registry.replace_chunks(doc_record.doc_id, chunks)?;
+
+                let chunk_ids: Vec<u32> = self.registry.get_chunks(doc_record.doc_id)?
+                    .iter().map(|c| c.chunk_id).collect();
+                self.embed_chunks(&content, &result, &chunk_ids);
+
+                if self.graph_store.is_some() {
+                    let ts = Self::now_secs();
+                    let (resolved, unresolved) = Self::build_edge_lists(
+                        &*self.registry, doc_record.doc_id, &source, &result, ts,
+                    );
+                    Self::graph_replace_outgoing(
+                        self.graph_store.as_deref_mut().unwrap(),
+                        doc_record.doc_id,
+                        &path,
+                        resolved,
+                        unresolved,
+                    );
+                }
+
+                let delta = (removed.len() + added.len()) as u32;
+                info!(doc_id = doc_record.doc_id, bitmaps = delta, "upserted updated remote document");
+                Ok(IngestResult { action: IngestAction::Updated, bitmaps_updated: delta })
+            }
+        }
+    }
+
     /// Find the first parser that can handle the given path.
     fn find_parser(&self, path: &Path) -> Option<&dyn Parser> {
         self.parsers.iter().find_map(|p| {

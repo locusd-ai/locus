@@ -14,6 +14,9 @@ members = [
     "crates/locus-embed",
     "crates/locus-code",
     "crates/locus-bench",
+    "crates/locus-confluence",
+    "crates/locus-jira",
+    "crates/locus-slack",
 ]
 
 [workspace.package]
@@ -35,6 +38,12 @@ locus-enrich = { path = "crates/locus-enrich" }
 locus-embed = { path = "crates/locus-embed" }
 locus-code = { path = "crates/locus-code" }
 locus-bench = { path = "crates/locus-bench" }
+locus-confluence = { path = "crates/locus-confluence" }
+locus-jira = { path = "crates/locus-jira" }
+locus-slack = { path = "crates/locus-slack" }
+
+# HTTP client (for remote source crates)
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
