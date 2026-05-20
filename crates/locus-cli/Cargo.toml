@@ -18,6 +18,10 @@ locus-parser = { workspace = true }
 locus-code = { workspace = true }
 locus-enrich = { workspace = true }
 locus-embed = { workspace = true }
+locus-watcher = { workspace = true }
+locus-confluence = { workspace = true }
+locus-jira = { workspace = true }
+locus-slack = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

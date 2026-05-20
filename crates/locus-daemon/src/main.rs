@@ -187,7 +187,27 @@ async fn main() -> Result<()> {
         }
 
         if cli.mcp {
-            let server = mcp::BiemMcpServer::new(engine);
+            let mut server = mcp::BiemMcpServer::new(engine);
+
+            // Wire ingestion pipeline into MCP when webhook is enabled
+            if cli.webhook {
+                let data_dir = data_dir_resolved.clone();
+                let db_path = data_dir.join("registry.duckdb");
+                let lmdb_path = data_dir.join("bitmaps.lmdb");
+                let mcp_registry: Box<dyn locus_core::registry::Registry> = Box::new(
+                    DuckDbRegistry::new(db_path.to_str().unwrap())
+                        .context("failed to open DuckDB for MCP ingest pipeline")?,
+                );
+                let mcp_bitmap: Box<dyn locus_core::bitmap::BitmapStore> = Box::new(
+                    LmdbBitmapStore::new(&lmdb_path)
+                        .context("failed to open LMDB for MCP ingest pipeline")?,
+                );
+                let mcp_pipeline = IngestionPipeline::new(all_parsers(), mcp_registry, mcp_bitmap);
+                let mcp_ingest = std::sync::Arc::new(std::sync::Mutex::new(mcp_pipeline));
+                server = server.with_ingest(mcp_ingest);
+                info!("MCP locus_remote_ingest tool enabled");
+            }
+
             info!("starting MCP server over stdio");
             let transport = rmcp::transport::io::stdio();
             let service = server.serve(transport).await

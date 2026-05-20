@@ -1,9 +1,10 @@
 //! MCP (Model Context Protocol) server for BIEM.
 //!
-//! Exposes 5 tools: locus_search, locus_inspect, locus_status, locus_filters, locus_graph.
+//! Exposes 6 tools: locus_search, locus_inspect, locus_status, locus_filters,
+//! locus_graph, locus_remote_ingest.
 //! Runs over stdio transport for integration with LLM clients.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rmcp::{
     ServerHandler,
@@ -18,6 +19,7 @@ use locus_core::graph::{
     GraphQueryRequest,
 };
 use locus_core::query::{Filter, QueryEngine, QueryRequest};
+use locus_ingest::IngestionPipeline;
 
 // ── Tool parameter types ─────────────────────────────────────────
 
@@ -80,26 +82,41 @@ fn default_direction() -> String { "outgoing".into() }
 fn default_algorithm() -> String { "pagerank".into() }
 fn default_k() -> u32 { 10 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RemoteIngestParams {
+    /// Synthetic document path, e.g. `confluence://SPACE/12345.confluence`
+    pub path: String,
+    /// Base64-encoded raw document bytes (as returned by a remote source's fetch_content)
+    pub content_b64: String,
+}
+
 // ── MCP Server ───────────────────────────────────────────────────
 
 /// The BIEM MCP server handler.
 ///
 /// Delegates all read/query operations to a `dyn QueryEngine`.
 /// Optionally wired with a `GraphQueryEngine` for graph traversal tools.
+/// Optionally wired with an `IngestionPipeline` for remote ingestion.
 pub struct BiemMcpServer {
     engine: Arc<dyn QueryEngine>,
     graph: Option<Arc<dyn GraphQueryEngine>>,
+    ingest: Option<Arc<Mutex<IngestionPipeline>>>,
     tool_router: ToolRouter<Self>,
 }
 
 impl BiemMcpServer {
     pub fn new(engine: Arc<dyn QueryEngine>) -> Self {
         let tool_router = Self::tool_router();
-        Self { engine, graph: None, tool_router }
+        Self { engine, graph: None, ingest: None, tool_router }
     }
 
     pub fn with_graph(mut self, g: Arc<dyn GraphQueryEngine>) -> Self {
         self.graph = Some(g);
+        self
+    }
+
+    pub fn with_ingest(mut self, p: Arc<Mutex<IngestionPipeline>>) -> Self {
+        self.ingest = Some(p);
         self
     }
 }
@@ -285,6 +302,91 @@ impl BiemMcpServer {
             Err(e) => format!(r#"{{"error":"{}"}}"#, e),
         }
     }
+
+    /// Ingest a remote document directly from an LLM session.
+    /// Accepts a synthetic path and base64-encoded content bytes.
+    /// The pipeline selects the correct parser based on the path extension
+    /// (.confluence, .jira, .slack) and performs an upsert (insert / update / skip).
+    /// Requires locusd to be started with the --webhook flag to wire the pipeline.
+    #[tool(name = "locus_remote_ingest", description = "Ingest a remote document (Confluence page, Jira issue, Slack bundle) directly into the index")]
+    fn remote_ingest(&self, params: Parameters<RemoteIngestParams>) -> String {
+        let params = params.0;
+
+        let Some(pipeline) = &self.ingest else {
+            return r#"{"error":"ingestion pipeline not wired — start locusd with --webhook"}"#.into();
+        };
+
+        let content = match base64_decode(&params.content_b64) {
+            Ok(b) => b,
+            Err(e) => return format!(r#"{{"error":"invalid base64: {e}"}}"#),
+        };
+
+        let path = std::path::PathBuf::from(&params.path);
+
+        let result = pipeline
+            .lock()
+            .map_err(|_| "pipeline mutex poisoned".to_string())
+            .and_then(|mut guard| guard.upsert_document(path, content).map_err(|e| e.to_string()));
+
+        match result {
+            Ok(r) => {
+                let action = match r.action {
+                    locus_ingest::IngestAction::Indexed => "indexed",
+                    locus_ingest::IngestAction::Updated => "updated",
+                    locus_ingest::IngestAction::Skipped => "skipped",
+                    locus_ingest::IngestAction::Tombstoned => "tombstoned",
+                    locus_ingest::IngestAction::Moved => "moved",
+                };
+                serde_json::json!({
+                    "path": params.path,
+                    "action": action,
+                    "bitmaps_updated": r.bitmaps_updated,
+                })
+                .to_string()
+            }
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e),
+        }
+    }
+}
+
+fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
+    const TABLE: [u8; 128] = {
+        let mut t = [255u8; 128];
+        let mut i = 0u8;
+        while i < 26 { t[(b'A' + i) as usize] = i; i += 1; }
+        i = 0;
+        while i < 26 { t[(b'a' + i) as usize] = 26 + i; i += 1; }
+        i = 0;
+        while i < 10 { t[(b'0' + i) as usize] = 52 + i; i += 1; }
+        t[b'+' as usize] = 62;
+        t[b'/' as usize] = 63;
+        t[b'=' as usize] = 0;
+        t
+    };
+    let s = s.trim();
+    let bytes = s.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return Err(format!("length {} not a multiple of 4", bytes.len()));
+    }
+    let mut out = Vec::with_capacity((bytes.len() / 4) * 3);
+    let mut i = 0;
+    while i < bytes.len() {
+        let [b0, b1, b2, b3] = [bytes[i], bytes[i+1], bytes[i+2], bytes[i+3]];
+        for &b in &[b0, b1, b2, b3] {
+            if b >= 128 || (TABLE[b as usize] == 255 && b != b'=') {
+                return Err(format!("invalid character: {:?}", b as char));
+            }
+        }
+        let n = ((TABLE[b0 as usize] as u32) << 18)
+            | ((TABLE[b1 as usize] as u32) << 12)
+            | ((TABLE[b2 as usize] as u32) << 6)
+            | (TABLE[b3 as usize] as u32);
+        out.push((n >> 16) as u8);
+        if b2 != b'=' { out.push((n >> 8) as u8); }
+        if b3 != b'=' { out.push(n as u8); }
+        i += 4;
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

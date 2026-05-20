@@ -8,7 +8,7 @@ use tracing_subscriber::EnvFilter;
 use locus_bitmap::lmdb::LmdbBitmapStore;
 use locus_bitmap::memory::InMemoryBitmapStore;
 use locus_core::bitmap::BitmapStore;
-use locus_core::config::{self, StorageMode};
+use locus_core::config::{self, RemoteSourceEntry, StorageMode};
 use locus_core::graph::{
     CentralityAlgorithm, Direction, EdgeCategory, EdgeFilter, ExpandSpec, GraphOp,
     GraphQueryEngine, GraphQueryRequest, GraphStore,
@@ -17,10 +17,12 @@ use locus_core::query::{Filter, QueryEngine, QueryRequest};
 use locus_core::registry::Registry;
 use locus_core::semantic::Embedder;
 use locus_core::types::SourceType;
+use locus_confluence::{ConfluenceConfig, ConfluenceParser, ConfluenceSource};
 use locus_embed::{FastEmbedEmbedder, UsearchVectorStore};
 use locus_enrich::builtin::{ComplexityTagger, ConventionTagger, SizeTagger, TopicTagger};
 use locus_enrich::{InMemoryTaggerCache, TagPipeline, FsTaggerCache, load_yaml_taggers};
 use locus_ingest::IngestionPipeline;
+use locus_jira::{JiraConfig, JiraParser, JiraSource};
 use locus_parser::markdown::MarkdownParser;
 use locus_code::CodeParser;
 use locus_query::BitmapQueryEngine;
@@ -29,6 +31,8 @@ use locus_query::SemanticQueryRequest;
 use locus_registry::duckdb::DuckDbRegistry;
 use locus_registry::graph::DuckDbGraphStore;
 use locus_registry::memory::InMemoryRegistry;
+use locus_slack::{SlackConfig, SlackParser, SlackSource};
+use locus_watcher::remote::RemoteIngestionLoop;
 
 #[derive(Parser)]
 #[command(name = "locus", about = "Locus — local-first indexing for LLMs — local-first indexing for LLMs")]
@@ -135,6 +139,11 @@ enum Commands {
         #[command(subcommand)]
         command: GraphCommands,
     },
+    /// Manage remote sources (Confluence, Jira, Slack)
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -196,6 +205,89 @@ enum GraphCommands {
     Stats,
 }
 
+#[derive(Subcommand)]
+enum RemoteCommands {
+    /// Register a new remote source
+    Add {
+        #[command(subcommand)]
+        kind: RemoteAddCommands,
+    },
+    /// List registered remote sources and their poll status
+    List,
+    /// Run a one-shot poll for one or all remote sources
+    Poll {
+        /// Name of the remote source to poll (polls all if omitted)
+        #[arg(long, short = 'n')]
+        name: Option<String>,
+        /// Force a full sync (ignore last_poll, fetch all items)
+        #[arg(long)]
+        full: bool,
+    },
+    /// Remove a remote source from the config
+    Remove {
+        /// Name of the remote source to remove
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RemoteAddCommands {
+    /// Register a Confluence Cloud space
+    /// API token: set CONFLUENCE_API_TOKEN env var
+    Confluence {
+        /// Friendly name for this source (used as config key)
+        #[arg(long)]
+        name: String,
+        /// Atlassian base URL, e.g. https://org.atlassian.net
+        #[arg(long)]
+        base_url: String,
+        /// Atlassian account email
+        #[arg(long)]
+        username: String,
+        /// Comma-separated space keys to index, e.g. ENG,OPS
+        #[arg(long, value_delimiter = ',')]
+        spaces: Vec<String>,
+        /// Poll interval in seconds (default 300)
+        #[arg(long, default_value = "300")]
+        poll_interval_secs: u64,
+    },
+    /// Register a Jira Cloud project
+    /// API token: set JIRA_API_TOKEN env var
+    Jira {
+        /// Friendly name for this source
+        #[arg(long)]
+        name: String,
+        /// Atlassian base URL, e.g. https://org.atlassian.net
+        #[arg(long)]
+        base_url: String,
+        /// Atlassian account email
+        #[arg(long)]
+        username: String,
+        /// Comma-separated project keys to index, e.g. PROJ,INFRA
+        #[arg(long, value_delimiter = ',')]
+        projects: Vec<String>,
+        /// Poll interval in seconds (default 300)
+        #[arg(long, default_value = "300")]
+        poll_interval_secs: u64,
+    },
+    /// Register Slack channels
+    /// Bot token: set SLACK_BOT_TOKEN env var
+    Slack {
+        /// Friendly name for this source
+        #[arg(long)]
+        name: String,
+        /// Comma-separated Slack channel IDs, e.g. C01234567,C09876543
+        #[arg(long, value_delimiter = ',')]
+        channel_ids: Vec<String>,
+        /// Comma-separated human-readable channel names (same order as channel-ids)
+        #[arg(long, value_delimiter = ',')]
+        channel_names: Vec<String>,
+        /// Poll interval in seconds (default 300)
+        #[arg(long, default_value = "300")]
+        poll_interval_secs: u64,
+    },
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -216,6 +308,7 @@ fn main() -> Result<()> {
         Commands::Enrich { ref path, force } => cmd_enrich(path, force, &cli),
         Commands::Semantic { ref query, ref filter, top_k } => cmd_semantic(query, filter, top_k, &cli),
         Commands::Graph { ref command } => cmd_graph(command, &cli),
+        Commands::Remote { ref command } => cmd_remote(command),
     }
 }
 
@@ -310,7 +403,18 @@ fn parsers_for_source(source_type: &SourceType) -> Vec<Box<dyn locus_core::parse
     match source_type {
         SourceType::Obsidian => vec![Box::new(MarkdownParser)],
         SourceType::Code => vec![Box::new(CodeParser::new())],
-        SourceType::Custom(_) => vec![Box::new(MarkdownParser)],
+        SourceType::Custom(kind) => parsers_for_remote_kind(kind),
+    }
+}
+
+/// Build the parser list for a remote source kind string.
+fn parsers_for_remote_kind(kind: &str) -> Vec<Box<dyn locus_core::parser::Parser>> {
+    match kind {
+        "confluence" => vec![Box::new(ConfluenceParser)],
+        "jira" => vec![Box::new(JiraParser)],
+        "slack" => vec![Box::new(SlackParser)],
+        // Unknown custom types fall back to markdown (best-effort)
+        _ => vec![Box::new(MarkdownParser)],
     }
 }
 
@@ -977,5 +1081,240 @@ fn cmd_graph(command: &GraphCommands, cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── locus remote ─────────────────────────────────────────────────────────────
+
+fn cmd_remote(command: &RemoteCommands) -> Result<()> {
+    match command {
+        RemoteCommands::Add { kind } => cmd_remote_add(kind),
+        RemoteCommands::List => cmd_remote_list(),
+        RemoteCommands::Poll { name, full } => cmd_remote_poll(name.as_deref(), *full),
+        RemoteCommands::Remove { name } => cmd_remote_remove(name),
+    }
+}
+
+fn cmd_remote_add(kind: &RemoteAddCommands) -> Result<()> {
+    let locus_dir = config::default_config_dir().context("could not find home directory")?;
+    let mut cfg = config::load_config().unwrap_or_default();
+
+    let (name, entry) = match kind {
+        RemoteAddCommands::Confluence { name, base_url, username, spaces, poll_interval_secs } => {
+            let entry = RemoteSourceEntry {
+                kind: "confluence".to_string(),
+                data_dir: PathBuf::new(),
+                last_poll: None,
+                poll_interval_secs: *poll_interval_secs,
+                base_url: Some(base_url.clone()),
+                username: Some(username.clone()),
+                spaces: Some(spaces.clone()),
+                projects: None,
+                channel_ids: None,
+                channel_names: None,
+            };
+            (name.clone(), entry)
+        }
+        RemoteAddCommands::Jira { name, base_url, username, projects, poll_interval_secs } => {
+            let entry = RemoteSourceEntry {
+                kind: "jira".to_string(),
+                data_dir: PathBuf::new(),
+                last_poll: None,
+                poll_interval_secs: *poll_interval_secs,
+                base_url: Some(base_url.clone()),
+                username: Some(username.clone()),
+                spaces: None,
+                projects: Some(projects.clone()),
+                channel_ids: None,
+                channel_names: None,
+            };
+            (name.clone(), entry)
+        }
+        RemoteAddCommands::Slack { name, channel_ids, channel_names, poll_interval_secs } => {
+            let entry = RemoteSourceEntry {
+                kind: "slack".to_string(),
+                data_dir: PathBuf::new(),
+                last_poll: None,
+                poll_interval_secs: *poll_interval_secs,
+                base_url: None,
+                username: None,
+                spaces: None,
+                projects: None,
+                channel_ids: Some(channel_ids.clone()),
+                channel_names: Some(channel_names.clone()),
+            };
+            (name.clone(), entry)
+        }
+    };
+
+    config::register_remote_source(&name, entry, &locus_dir, &mut cfg)
+        .with_context(|| format!("failed to register remote source '{name}'"))?;
+    config::save_config(&cfg).context("failed to save config")?;
+
+    println!("Remote source '{}' registered.", name);
+    let tip = match kind {
+        RemoteAddCommands::Confluence { name, .. } =>
+            format!("Set CONFLUENCE_API_TOKEN, then run: locus remote poll --name {name}"),
+        RemoteAddCommands::Jira { name, .. } =>
+            format!("Set JIRA_API_TOKEN, then run: locus remote poll --name {name}"),
+        RemoteAddCommands::Slack { name, .. } =>
+            format!("Set SLACK_BOT_TOKEN, then run: locus remote poll --name {name}"),
+    };
+    println!("Next: {tip}");
+    Ok(())
+}
+
+fn cmd_remote_list() -> Result<()> {
+    let cfg = config::load_config().unwrap_or_default();
+    if cfg.remote_sources.is_empty() {
+        println!("No remote sources registered. Use `locus remote add` to register one.");
+        return Ok(());
+    }
+    println!("{:<20} {:<12} {:<10} {}", "NAME", "KIND", "INTERVAL", "LAST POLL");
+    println!("{}", "-".repeat(70));
+    for (name, entry) in &cfg.remote_sources {
+        let last = entry.last_poll.map(format_timestamp).unwrap_or_else(|| "never".to_string());
+        let summary = match entry.kind.as_str() {
+            "confluence" => format!("spaces: {}", entry.spaces.as_deref().unwrap_or_default().join(", ")),
+            "jira" => format!("projects: {}", entry.projects.as_deref().unwrap_or_default().join(", ")),
+            "slack" => {
+                let names = entry.channel_names.as_deref().unwrap_or_default();
+                format!("channels: {}", names.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
+            }
+            _ => String::new(),
+        };
+        println!("{:<20} {:<12} {:<10} {}  ({})", name, entry.kind, entry.poll_interval_secs, last, summary);
+    }
+    Ok(())
+}
+
+fn cmd_remote_poll(name: Option<&str>, full: bool) -> Result<()> {
+    let locus_dir = config::default_config_dir().context("could not find home directory")?;
+    let mut cfg = config::load_config().unwrap_or_default();
+
+    let names: Vec<String> = if let Some(n) = name {
+        if !cfg.remote_sources.contains_key(n) {
+            anyhow::bail!("remote source '{}' not found — use `locus remote list`", n);
+        }
+        vec![n.to_string()]
+    } else {
+        cfg.remote_sources.keys().cloned().collect()
+    };
+
+    if names.is_empty() {
+        println!("No remote sources registered. Use `locus remote add` first.");
+        return Ok(());
+    }
+
+    for source_name in &names {
+        let entry = cfg.remote_sources[source_name].clone();
+        let since = if full { None } else { entry.last_poll };
+
+        println!(
+            "Polling '{}' ({}) since {}...",
+            source_name, entry.kind,
+            since.map(format_timestamp).unwrap_or_else(|| "beginning".to_string())
+        );
+
+        let db_path = entry.data_dir.join("registry.duckdb");
+        let lmdb_path = entry.data_dir.join("bitmaps.lmdb");
+        let registry = DuckDbRegistry::new(db_path.to_str().unwrap())
+            .with_context(|| format!("failed to open DuckDB for '{source_name}'"))?;
+        let bitmap_store = LmdbBitmapStore::new(&lmdb_path)
+            .with_context(|| format!("failed to open LMDB for '{source_name}'"))?;
+
+        let parsers = parsers_for_remote_kind(&entry.kind);
+        let mut pipeline = IngestionPipeline::new(parsers, Box::new(registry), Box::new(bitmap_store));
+
+        let remote_source: Box<dyn locus_watcher::remote::RemoteSource> = match entry.kind.as_str() {
+            "confluence" => {
+                let api_token = std::env::var("CONFLUENCE_API_TOKEN")
+                    .context("CONFLUENCE_API_TOKEN not set")?;
+                Box::new(ConfluenceSource::new(ConfluenceConfig {
+                    base_url: entry.base_url.unwrap_or_default(),
+                    username: entry.username.unwrap_or_default(),
+                    api_token,
+                    spaces: entry.spaces.unwrap_or_default(),
+                    poll_interval_secs: entry.poll_interval_secs,
+                }))
+            }
+            "jira" => {
+                let api_token = std::env::var("JIRA_API_TOKEN")
+                    .context("JIRA_API_TOKEN not set")?;
+                Box::new(JiraSource::new(JiraConfig {
+                    base_url: entry.base_url.unwrap_or_default(),
+                    username: entry.username.unwrap_or_default(),
+                    api_token,
+                    projects: entry.projects.unwrap_or_default(),
+                    poll_interval_secs: entry.poll_interval_secs,
+                }))
+            }
+            "slack" => {
+                let bot_token = std::env::var("SLACK_BOT_TOKEN")
+                    .context("SLACK_BOT_TOKEN not set")?;
+                Box::new(SlackSource::new(SlackConfig {
+                    bot_token,
+                    channel_ids: entry.channel_ids.unwrap_or_default(),
+                    channel_names: entry.channel_names.unwrap_or_default(),
+                    poll_interval_secs: entry.poll_interval_secs,
+                }))
+            }
+            other => anyhow::bail!("unknown remote source kind: '{other}'"),
+        };
+
+        let mut loop_ = RemoteIngestionLoop::new(
+            remote_source,
+            std::time::Duration::from_secs(entry.poll_interval_secs),
+        );
+
+        let (count, new_ts) = loop_.poll_once(since, |path, bytes| {
+            if let Err(e) = pipeline.upsert_document(path.clone(), bytes) {
+                eprintln!("  warn: failed to ingest {}: {e}", path.display());
+            }
+        });
+
+        println!("  ingested {count} item(s)");
+
+        if let Some(ts) = new_ts {
+            config::update_remote_last_poll(source_name, ts, &mut cfg)
+                .context("failed to update last_poll")?;
+            config::save_config(&cfg).context("failed to save config")?;
+        }
+    }
+
+    let _ = locus_dir;
+    Ok(())
+}
+
+fn cmd_remote_remove(name: &str) -> Result<()> {
+    let mut cfg = config::load_config().unwrap_or_default();
+    config::remove_remote_source(name, &mut cfg)
+        .with_context(|| format!("remote source '{}' not found", name))?;
+    config::save_config(&cfg).context("failed to save config")?;
+    println!("Remote source '{}' removed from config.", name);
+    println!("Note: state directory is NOT deleted. Remove it manually if needed.");
+    Ok(())
+}
+
+fn format_timestamp(ts: i64) -> String {
+    let secs = ts.max(0) as u64;
+    let days = secs / 86400;
+    let (y, m, d) = days_to_ymd(days);
+    let h = (secs % 86400) / 3600;
+    let min = (secs % 3600) / 60;
+    format!("{:04}-{:02}-{:02} {:02}:{:02}Z", y, m, d, h, min)
+}
+
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z % 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 

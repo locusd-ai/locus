@@ -15,14 +15,64 @@ use crate::types::SourceType;
 /// Top-level BIEM configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct BiemConfig {
-    /// Registered sources, keyed by a human-friendly name.
+    /// Registered filesystem sources, keyed by a human-friendly name.
     #[serde(default)]
     pub sources: BTreeMap<String, SourceEntry>,
+
+    /// Registered remote (API-polled) sources, keyed by a human-friendly name.
+    #[serde(default)]
+    pub remote_sources: BTreeMap<String, RemoteSourceEntry>,
 
     // Legacy alias: deserialize old configs that use "vaults"
     #[serde(default, rename = "vaults")]
     #[serde(skip_serializing)]
     vaults_compat: BTreeMap<String, SourceEntry>,
+}
+
+// ── Remote source config ─────────────────────────────────────────
+
+fn default_poll_interval_secs() -> u64 { 300 }
+
+/// A registered remote source (Confluence, Jira, Slack, etc.).
+/// API credentials are NOT stored here — read from env vars at poll time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteSourceEntry {
+    /// Source kind: `"confluence"`, `"jira"`, `"slack"`.
+    pub kind: String,
+    /// State directory (DuckDB + LMDB live here).
+    pub data_dir: PathBuf,
+    /// Unix timestamp of the last successful poll. `None` = never polled (full sync).
+    #[serde(default)]
+    pub last_poll: Option<i64>,
+    /// How often to poll in background mode (seconds).
+    #[serde(default = "default_poll_interval_secs")]
+    pub poll_interval_secs: u64,
+
+    // ── Confluence / Jira shared ──────────────────────────────────
+    /// Base URL of the Atlassian instance, e.g. `https://org.atlassian.net`
+    pub base_url: Option<String>,
+    /// Atlassian account email used for Basic auth.
+    pub username: Option<String>,
+
+    // ── Confluence-specific ───────────────────────────────────────
+    /// Confluence space keys to poll, e.g. `["ENG", "OPS"]`.
+    pub spaces: Option<Vec<String>>,
+
+    // ── Jira-specific ─────────────────────────────────────────────
+    /// Jira project keys to poll, e.g. `["PROJ", "INFRA"]`.
+    pub projects: Option<Vec<String>>,
+
+    // ── Slack-specific ────────────────────────────────────────────
+    /// Slack channel IDs to poll, e.g. `["C01234567"]`.
+    pub channel_ids: Option<Vec<String>>,
+    /// Human-readable channel names (parallel to channel_ids), used for tagging.
+    pub channel_names: Option<Vec<String>>,
+}
+
+impl RemoteSourceEntry {
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
 }
 
 impl BiemConfig {
@@ -268,6 +318,48 @@ pub fn remove_source(source_path: &Path, config: &mut BiemConfig) -> Result<Stri
             canonical.to_string_lossy().into_owned(),
         )),
     }
+}
+
+// ── Remote source helpers ────────────────────────────────────────
+
+/// Register a remote source in the config and create its state directory.
+pub fn register_remote_source(
+    name: &str,
+    mut entry: RemoteSourceEntry,
+    locus_dir: &Path,
+    config: &mut BiemConfig,
+) -> Result<(), ConfigError> {
+    if config.remote_sources.contains_key(name) {
+        return Err(ConfigError::SourceAlreadyRegistered(name.to_string()));
+    }
+
+    if entry.data_dir.as_os_str().is_empty() {
+        entry.data_dir = locus_dir.join("remote").join(name);
+    }
+    std::fs::create_dir_all(&entry.data_dir)?;
+    config.remote_sources.insert(name.to_string(), entry);
+    Ok(())
+}
+
+/// Remove a remote source from the config by name. Does NOT delete the state directory.
+pub fn remove_remote_source(name: &str, config: &mut BiemConfig) -> Result<(), ConfigError> {
+    if config.remote_sources.remove(name).is_none() {
+        return Err(ConfigError::SourceNotFound(name.to_string()));
+    }
+    Ok(())
+}
+
+/// Update the `last_poll` timestamp for a remote source.
+pub fn update_remote_last_poll(
+    name: &str,
+    ts: i64,
+    config: &mut BiemConfig,
+) -> Result<(), ConfigError> {
+    config
+        .remote_sources
+        .get_mut(name)
+        .ok_or_else(|| ConfigError::SourceNotFound(name.to_string()))
+        .map(|e| e.last_poll = Some(ts))
 }
 
 // ── Backwards compatibility ──────────────────────────────────────
