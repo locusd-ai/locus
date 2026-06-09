@@ -122,7 +122,19 @@ impl BiemMcpServer {
 }
 
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for BiemMcpServer {}
+impl ServerHandler for BiemMcpServer {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        let mut implementation = rmcp::model::Implementation::default();
+        implementation.name = "locus".into();
+        implementation.version = env!("CARGO_PKG_VERSION").into();
+        let mut info = rmcp::model::ServerInfo::default();
+        info.server_info = implementation;
+        info.capabilities = rmcp::model::ServerCapabilities::builder()
+            .enable_tools()
+            .build();
+        info
+    }
+}
 
 #[tool_router(router = tool_router)]
 impl BiemMcpServer {

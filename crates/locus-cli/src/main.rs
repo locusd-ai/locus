@@ -35,7 +35,7 @@ use locus_slack::{SlackConfig, SlackParser, SlackSource};
 use locus_watcher::remote::RemoteIngestionLoop;
 
 #[derive(Parser)]
-#[command(name = "locus", about = "Locus — local-first indexing for LLMs — local-first indexing for LLMs")]
+#[command(name = "locus", about = "Locus — local-first indexing for LLMs")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -347,6 +347,12 @@ fn resolve_data_dir(cli: &Cli) -> Result<PathBuf> {
         let entry = cfg.sources.values().next().unwrap();
         return Ok(entry.data_dir.clone());
     }
+    // Multiple sources: use the one containing the current directory
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(entry) = cfg.sources.values().find(|e| cwd.starts_with(&e.path)) {
+            return Ok(entry.data_dir.clone());
+        }
+    }
     // Fall back to legacy default ~/.locus/
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".locus"))
@@ -649,7 +655,7 @@ fn cmd_status(vault: Option<&PathBuf>, cli: &Cli) -> Result<()> {
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
-        println!("BIEM Index Status");
+        println!("Locus Index Status");
         println!("  documents:  {}", status.total_documents);
         println!("  bitmaps:    {}", status.total_bitmaps);
         println!("  tombstoned: {}", status.tombstoned);
