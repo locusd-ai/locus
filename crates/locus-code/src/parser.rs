@@ -374,8 +374,21 @@ fn is_async_function(node: &tree_sitter::Node, source: &str) -> bool {
         }
     }
     // Fallback: check source text for async keyword
-    let text = &source[node.start_byte()..node.end_byte().min(node.start_byte() + 50)];
+    let end = floor_char_boundary(source, node.end_byte().min(node.start_byte() + 50));
+    let text = &source[node.start_byte()..end];
     text.contains("async fn") || text.starts_with("async ")
+}
+
+/// Snap a byte index down to the nearest UTF-8 char boundary.
+/// Arithmetic offsets (e.g. start + 50) can land inside a multi-byte
+/// character; slicing there panics. Tree-sitter node boundaries themselves
+/// are always safe.
+fn floor_char_boundary(s: &str, mut i: usize) -> usize {
+    i = i.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 /// Check if a function is a test function.
@@ -386,7 +399,7 @@ fn is_test_function(node: &tree_sitter::Node, source: &str) -> bool {
     // Check for Rust #[test] attribute: look at source before the function
     let start = node.start_byte();
     // Look back up to 200 bytes for attributes
-    let lookback_start = start.saturating_sub(200);
+    let lookback_start = floor_char_boundary(source, start.saturating_sub(200));
     let preceding = &source[lookback_start..start];
     if preceding.contains("#[test]") || preceding.contains("#[tokio::test]") || preceding.contains("#[rstest]") {
         return true;
@@ -1063,6 +1076,19 @@ fn add_tag_once(tags: &mut Vec<String>, tag: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_multibyte_chars_near_function_boundaries_do_not_panic() {
+        // Em-dash before a fn: the 200-byte attribute lookback and the
+        // 50-byte async lookahead must snap to char boundaries.
+        let padding = "─".repeat(120);
+        let source = format!("//! {padding}\n\nfn tiny() {{}}\n\n// {padding}\nasync fn later() {{}}\n");
+        let parser = CodeParser::new();
+        let result = parser
+            .parse(Path::new("src/lib.rs"), source.as_bytes())
+            .expect("parse should not fail");
+        assert!(!result.chunks.is_empty());
+    }
 
     #[test]
     fn test_can_parse_rust_files() {
