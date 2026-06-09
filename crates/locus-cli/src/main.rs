@@ -144,6 +144,27 @@ enum Commands {
         #[command(subcommand)]
         command: RemoteCommands,
     },
+    /// Set up Locus as an MCP server for AI agents (Claude Code, Cursor)
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpCommands {
+    /// Register locusd as a stdio MCP server by writing .mcp.json
+    Install {
+        /// Vault or repo to serve (default: current directory)
+        #[arg(default_value = ".")]
+        vault: PathBuf,
+        /// Path to the locusd binary (default: next to this binary, then $PATH)
+        #[arg(long)]
+        locusd: Option<PathBuf>,
+        /// Directory whose .mcp.json to write (default: the vault directory)
+        #[arg(long)]
+        target: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -309,6 +330,7 @@ fn main() -> Result<()> {
         Commands::Semantic { ref query, ref filter, top_k } => cmd_semantic(query, filter, top_k, &cli),
         Commands::Graph { ref command } => cmd_graph(command, &cli),
         Commands::Remote { ref command } => cmd_remote(command),
+        Commands::Mcp { ref command } => cmd_mcp(command),
     }
 }
 
@@ -1318,3 +1340,84 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
+
+// ── MCP setup ────────────────────────────────────────────────────
+
+fn cmd_mcp(command: &McpCommands) -> Result<()> {
+    match command {
+        McpCommands::Install { vault, locusd, target } => cmd_mcp_install(vault, locusd.as_ref(), target.as_ref()),
+    }
+}
+
+fn resolve_locusd(explicit: Option<&PathBuf>) -> Result<PathBuf> {
+    if let Some(p) = explicit {
+        return p.canonicalize().with_context(|| format!("locusd not found at {}", p.display()));
+    }
+    // Prefer a locusd sitting next to this locus binary (cargo install puts them together)
+    if let Ok(me) = std::env::current_exe() {
+        let sibling = me.with_file_name("locusd");
+        if sibling.is_file() {
+            return Ok(sibling);
+        }
+    }
+    // Fall back to $PATH
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join("locusd");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    anyhow::bail!("locusd binary not found next to locus or on $PATH — pass --locusd /path/to/locusd")
+}
+
+fn cmd_mcp_install(vault: &PathBuf, locusd: Option<&PathBuf>, target: Option<&PathBuf>) -> Result<()> {
+    let vault = vault
+        .canonicalize()
+        .with_context(|| format!("vault path does not exist: {}", vault.display()))?;
+    let locusd = resolve_locusd(locusd)?;
+    let target_dir = match target {
+        Some(t) => t.canonicalize().with_context(|| format!("target dir does not exist: {}", t.display()))?,
+        None => vault.clone(),
+    };
+    let config_path = target_dir.join(".mcp.json");
+
+    let mut root: serde_json::Value = if config_path.is_file() {
+        let raw = std::fs::read_to_string(&config_path)
+            .with_context(|| format!("failed to read {}", config_path.display()))?;
+        serde_json::from_str(&raw)
+            .with_context(|| format!("{} is not valid JSON — fix or remove it first", config_path.display()))?
+    } else {
+        serde_json::json!({})
+    };
+
+    if !root.is_object() {
+        anyhow::bail!("{} does not contain a JSON object", config_path.display());
+    }
+    let servers = root
+        .as_object_mut()
+        .unwrap()
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    if !servers.is_object() {
+        anyhow::bail!("\"mcpServers\" in {} is not an object", config_path.display());
+    }
+    servers.as_object_mut().unwrap().insert(
+        "locus".to_string(),
+        serde_json::json!({
+            "command": locusd.to_string_lossy(),
+            "args": [vault.to_string_lossy(), "--mcp"],
+        }),
+    );
+
+    std::fs::write(&config_path, serde_json::to_string_pretty(&root)? + "\n")
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+
+    println!("✓ Registered Locus MCP server in {}", config_path.display());
+    println!("  command: {} {} --mcp", locusd.display(), vault.display());
+    println!();
+    println!("  Claude Code picks this up automatically next time it starts in {}", target_dir.display());
+    println!("  Make sure the vault is indexed first:  locus index {}", vault.display());
+    Ok(())
+}
