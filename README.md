@@ -53,7 +53,7 @@ Agents stop re-discovering your codebase every session: queries return labeled p
 ## Quickstart
 
 ```sh
-git clone <this repo> && cd locus
+git clone https://github.com/locusd-ai/locus && cd locus
 cargo install --path crates/locus-cli
 cargo install --path crates/locus-daemon
 
