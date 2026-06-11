@@ -28,6 +28,7 @@ use locus_code::CodeParser;
 use locus_query::BitmapQueryEngine;
 use locus_query::PetgraphQueryEngine;
 use locus_query::SemanticQueryRequest;
+use locus_query::match_all_filter;
 use locus_registry::duckdb::DuckDbRegistry;
 use locus_registry::graph::DuckDbGraphStore;
 use locus_registry::memory::InMemoryRegistry;
@@ -560,17 +561,40 @@ fn cmd_index(path: &PathBuf, cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+/// Build a Filter from positional CLI filter arguments.
+///
+/// - No args → match everything (union of `source:*` bitmaps).
+/// - A single arg containing whitespace or parentheses is treated as a filter
+///   expression and parsed (`"tag:work AND NOT folder:archive"`).
+/// - Otherwise plain `namespace:value` keys: one key passes through, several
+///   keys are ANDed (legacy behavior, preserved exactly).
+fn build_cli_filter(
+    filter_keys: &[String],
+    bitmap_store: &dyn locus_core::bitmap::BitmapStore,
+) -> Result<Filter> {
+    if filter_keys.is_empty() {
+        return Ok(match_all_filter(bitmap_store));
+    }
+    if filter_keys.len() == 1 {
+        let arg = &filter_keys[0];
+        if arg.contains(char::is_whitespace) || arg.contains('(') {
+            return locus_query::parse_filter(arg)
+                .with_context(|| format!("invalid filter expression: {arg}"));
+        }
+        return Ok(Filter::Key(arg.clone()));
+    }
+    Ok(Filter::And(
+        filter_keys.iter().map(|k| Filter::Key(k.clone())).collect(),
+    ))
+}
+
 fn cmd_search(vault: Option<&PathBuf>, filter_keys: &[String], limit: u32, cli: &Cli) -> Result<()> {
     let (registry, bitmap_store) = build_pipeline_and_index(vault, cli)?;
-    let engine = BitmapQueryEngine::new(bitmap_store, registry);
 
-    let filter = if filter_keys.len() == 1 {
-        Filter::Key(filter_keys[0].clone())
-    } else if filter_keys.is_empty() {
-        Filter::Key("source:obsidian".into())
-    } else {
-        Filter::And(filter_keys.iter().map(|k| Filter::Key(k.clone())).collect())
-    };
+    // Compute default filter before moving bitmap_store into the engine.
+    let filter = build_cli_filter(filter_keys, bitmap_store.as_ref())?;
+
+    let engine = BitmapQueryEngine::new(bitmap_store, registry);
 
     let result = engine.query(QueryRequest {
         filter,
@@ -733,16 +757,11 @@ fn cmd_semantic(query: &str, filter_keys: &[String], top_k: usize, cli: &Cli) ->
     }
 
     let (registry, bitmap_store) = open_persistent_stores(&data_dir)?;
-    let engine = BitmapQueryEngine::new(bitmap_store, registry);
 
-    // Build filter from keys (default to source:obsidian if no filters)
-    let filter = if filter_keys.len() == 1 {
-        Filter::Key(filter_keys[0].clone())
-    } else if filter_keys.is_empty() {
-        Filter::Key("source:obsidian".into())
-    } else {
-        Filter::And(filter_keys.iter().map(|k| Filter::Key(k.clone())).collect())
-    };
+    // Compute default filter before moving bitmap_store into the engine.
+    let filter = build_cli_filter(filter_keys, bitmap_store.as_ref())?;
+
+    let engine = BitmapQueryEngine::new(bitmap_store, registry);
 
     let request = SemanticQueryRequest {
         filter,
@@ -1421,7 +1440,7 @@ fn cmd_mcp_install(vault: &PathBuf, locusd: Option<&PathBuf>, target: Option<&Pa
         "locus".to_string(),
         serde_json::json!({
             "command": locusd.to_string_lossy(),
-            "args": [vault.to_string_lossy(), "--mcp"],
+            "args": [vault.to_string_lossy(), "--mcp", "--semantic"],
         }),
     );
 

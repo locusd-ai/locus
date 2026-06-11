@@ -17,6 +17,7 @@ locus-bitmap = { workspace = true }
 locus-registry = { workspace = true }
 locus-parser = { workspace = true }
 locus-code = { workspace = true }
+locus-embed = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

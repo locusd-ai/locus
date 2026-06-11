@@ -793,16 +793,62 @@ pub enum QueryError {
 }
 ```
 
+### Filter expression parser (locus-query)
+
+`locus_query::parse_filter` parses a human-readable filter expression into a `Filter` AST.
+
+**Grammar (precedence: NOT > AND > OR):**
+```
+expr     := or_expr
+or_expr  := and_expr ("OR" and_expr)*
+and_expr := not_expr ("AND" not_expr)*
+not_expr := "NOT" not_expr | primary
+primary  := "(" expr ")" | namespace ":" value
+```
+
+**Valid namespaces:** `tag`, `folder`, `type`, `source`, `lang`, `kind`, `topic`, `complexity`, `visibility`, `convention`, `async`, `import`, `link` (and any other key in the index).
+
+**Value characters:** alphanumeric, `/`, `-`, `_`, `.`, `:`.
+
+Bare terms without a colon are rejected with a helpful error suggesting valid namespaces.
+
+```rust
+// Public API (re-exported from locus_query)
+pub fn parse_filter(input: &str) -> Result<Filter, FilterParseError>;
+
+/// Build a match-all filter: OR over all `source:*` keys in the bitmap store.
+/// Returns Filter::Or(vec![]) for an empty store (correct behaviour).
+pub fn match_all_filter(store: &dyn BitmapStore) -> Filter;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FilterParseError {
+    #[error("unexpected end of input at position {pos}: {msg}")]
+    UnexpectedEof { pos: usize, msg: String },
+    #[error("unexpected token '{token}' at position {pos}: {msg}")]
+    UnexpectedToken { token: String, pos: usize, msg: String },
+    #[error("bare term '{term}' at position {pos}: terms must be namespaced ...")]
+    BareTerm { term: String, pos: usize },
+    #[error("empty parentheses at position {pos}")]
+    EmptyParens { pos: usize },
+    #[error("missing closing ')' for '(' at position {pos}")]
+    UnclosedParen { pos: usize },
+    #[error("empty value for key '{namespace}' at position {pos}")]
+    EmptyValue { namespace: String, pos: usize },
+}
+```
+
 ### Filter resolution example
 
 A query for "tasks tagged work but not archived":
 
 ```rust
+let filter = parse_filter("tag:work AND type:task AND NOT folder:archive").unwrap();
+// Equivalent to:
 let request = QueryRequest {
     filter: Filter::And(vec![
         Filter::Key("tag:work".into()),
         Filter::Key("type:task".into()),
-        Filter::Not(Box::new(Filter::Key("folder:/archive".into()))),
+        Filter::Not(Box::new(Filter::Key("folder:archive".into()))),
     ]),
     limit: Some(10),
     offset: None,
@@ -811,7 +857,7 @@ let request = QueryRequest {
 
 Resolved by the engine as:
 ```
-result = bitmap("tag:work") AND bitmap("type:task") AND NOT bitmap("folder:/archive")
+result = bitmap("tag:work") AND bitmap("type:task") AND NOT bitmap("folder:archive")
 result = result AND NOT bitmap("_tombstone")
 ```
 
@@ -823,49 +869,44 @@ The interface layer translates protocol-specific requests into `QueryRequest` an
 
 ### 8.1 MCP Tools
 
-```rust
-/// MCP tool definitions exposed by Locus.
-/// These map directly to QueryEngine methods.
+Seven tools exposed by `locusd --mcp`:
 
-// Tool: locus_search
-// Input:  { filters: [{ key: "tag:work" }, { key: "type:task" }], op: "and", limit: 10 }
-// Output: QueryResult serialized as JSON
+| Tool | Input | Output |
+|------|-------|--------|
+| `locus_search` | `filter` (expression), `filters` (legacy array), `op`, `limit` | `QueryResult` JSON |
+| `locus_semantic` | `query`, `filter` (expression), `top_k`, `rerank` | `SemanticQueryResult` JSON |
+| `locus_inspect` | `file_path` | doc metadata + chunks + bitmap keys |
+| `locus_status` | — | index health summary |
+| `locus_filters` | `category` (optional) | `Vec<FilterEntry>` |
+| `locus_graph` | `operation`, `doc_id`, `hops`, `direction`, etc. | graph traversal result |
+| `locus_remote_ingest` | `path`, `content_b64` | ingest action summary |
 
-// Tool: locus_inspect
-// Input:  { file_path: "/path/to/note.md" }
-// Output: DocRecord + chunks + associated bitmap keys
-
-// Tool: locus_status
-// Input:  {}
-// Output: { total_documents, total_bitmaps, tombstoned, last_indexed }
-
-// Tool: locus_filters
-// Input:  { category: "tag" }  (optional)
-// Output: Vec<BitmapCatalogEntry> — available filters for discovery
-```
+`locus_search` and `locus_semantic` both accept the filter expression DSL via the `filter` parameter. If `filter` is absent, `locus_search` falls back to the legacy `filters` array; if both are absent, all indexed documents are searched (match-all). `locus_semantic` requires `locusd --semantic` to wire the embedder.
 
 ### 8.2 CLI Commands
 
 ```
-locus search --filter "tag:work AND type:task AND NOT folder:/archive" --limit 10
-locus search --tag work --type task --limit 10       # shorthand
+locus search [filter_keys...]
+locus semantic "query text" [--filter "expr"] [--top-k N]
 locus inspect /path/to/note.md
 locus status
-locus filters [--category tag|folder|link|type]
-locus bitmaps                                         # alias for filters
-locus init <path> [--local]
-locus config [--storage local|global]
+locus filters [--category tag|folder|link|type|source]
+locus init <path> [--local] [--type obsidian|code]
+locus config
 locus compact
 ```
 
 ### 8.3 HTTP API
 
 ```
-POST /v1/search     body: QueryRequest    → QueryResult
-GET  /v1/inspect    ?path=...             → DocRecord + chunks
-GET  /v1/status                           → index health
-GET  /v1/filters    ?category=tag         → Vec<BitmapCatalogEntry>
+POST /v1/search     body: { filter?, filters?, op?, limit?, offset? }  → QueryResult
+POST /v1/semantic   body: { query, filter?, top_k?, rerank? }          → SemanticQueryResult
+GET  /v1/inspect    ?path=...                                           → InspectResult
+GET  /v1/status                                                         → IndexStatus
+GET  /v1/filters    ?category=tag                                       → Vec<FilterEntry>
 ```
+
+`/v1/semantic` is only available when `locusd` is started with `--semantic`.
 
 ---
 

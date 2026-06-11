@@ -36,7 +36,7 @@ Three stages, each cheaper than the last one is precise:
 
 ## For AI agents (MCP)
 
-`locusd` exposes the engine over MCP (`locus_search`, `locus_graph`, `locus_inspect`, `locus_filters`, `locus_status`, `locus_remote_ingest`). One command registers it with Claude Code:
+`locusd` exposes the engine over MCP (`locus_search`, `locus_semantic`, `locus_graph`, `locus_inspect`, `locus_filters`, `locus_status`, `locus_remote_ingest`). One command registers it with Claude Code:
 
 ```sh
 locus mcp install ~/your-repo    # writes .mcp.json — the agent now has a map
