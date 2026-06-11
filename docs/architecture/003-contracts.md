@@ -809,22 +809,22 @@ The interface layer translates protocol-specific requests into `QueryRequest` an
 ### 8.1 MCP Tools
 
 ```rust
-/// MCP tool definitions exposed by BIEM.
+/// MCP tool definitions exposed by Locus.
 /// These map directly to QueryEngine methods.
 
-// Tool: biem_search
+// Tool: locus_search
 // Input:  { filters: [{ key: "tag:work" }, { key: "type:task" }], op: "and", limit: 10 }
 // Output: QueryResult serialized as JSON
 
-// Tool: biem_inspect
+// Tool: locus_inspect
 // Input:  { file_path: "/path/to/note.md" }
 // Output: DocRecord + chunks + associated bitmap keys
 
-// Tool: biem_status
+// Tool: locus_status
 // Input:  {}
 // Output: { total_documents, total_bitmaps, tombstoned, last_indexed }
 
-// Tool: biem_filters
+// Tool: locus_filters
 // Input:  { category: "tag" }  (optional)
 // Output: Vec<BitmapCatalogEntry> — available filters for discovery
 ```
@@ -891,7 +891,7 @@ locus/
 - **Generics** (`fn process<R: Registry>(reg: &R)`) — the compiler generates specialised code for each concrete type. Zero runtime overhead (no virtual dispatch), but every consumer must be generic too, which "infects" upward through the call stack.
 - **Trait objects** (`fn process(reg: &dyn Registry)`) — one compiled function, dispatches via vtable pointer at runtime. Tiny overhead (~1-2ns per call), but much simpler code.
 
-**Comparison for BIEM**:
+**Comparison for Locus**:
 
 | Factor | Generics | Trait objects |
 |--------|----------|---------------|
@@ -906,7 +906,7 @@ locus/
 **Decision: Trait objects (`Box<dyn Trait>` / `Arc<dyn Trait>`) for v1.**
 
 Reasons:
-1. BIEM's hot path is bitmap intersection and LMDB reads — measured in microseconds. A 1-2ns vtable dispatch is noise.
+1. Locus's hot path is bitmap intersection and LMDB reads — measured in microseconds. A 1-2ns vtable dispatch is noise.
 2. It makes testing dramatically easier — mock Registry and BitmapStore without generics gymnastics.
 3. The code stays readable for a v1. You can always switch a specific hot path to generics later if profiling shows it matters.
 4. With only one implementation per trait in Phase 1, there's no compile-time benefit from generics anyway.
@@ -1014,7 +1014,7 @@ graph LR
         CLI_CMD["search, inspect, status,<br/>init, config, compact"]
     end
 
-    subgraph biemd["biemd (daemon binary)"]
+    subgraph locusd["locusd (daemon binary)"]
         WATCH["Watcher"]
         INGEST["Ingestion"]
         MCP_S["MCP Server<br/>(opt-in)"]
@@ -1031,10 +1031,10 @@ graph LR
 **How it works**:
 
 ```
-biemd                           # start daemon (watcher + ingestion)
-biemd --mcp                     # start daemon + MCP server
-biemd --http                    # start daemon + HTTP API
-biemd --mcp --http              # start daemon + both
+locusd                           # start daemon (watcher + ingestion)
+locusd --mcp                     # start daemon + MCP server
+locusd --http                    # start daemon + HTTP API
+locusd --mcp --http              # start daemon + both
 
 locus search --tag work          # CLI talks to running daemon
 locus init /path/to/vault        # registers vault, daemon picks it up
@@ -1088,7 +1088,7 @@ graph BT
     QUERY["locus-query<br/>(QueryEngine)"]
     WATCH["locus-watcher<br/>(SourceFeed trait + FsWatcher)"]
     CLI["locus-cli<br/>(locus binary)"]
-    DAEMON["locus-daemon<br/>(biemd binary)"]
+    DAEMON["locus-daemon<br/>(locusd binary)"]
 
     PARSER --> CORE
     REG --> CORE

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# BIEM Benchmark Report Generator
+# Locus Benchmark Report Generator
 #
 # Runs the scale test and criterion benchmarks, then generates a Markdown
 # report suitable for hosting in the GitHub repo.
@@ -39,7 +39,7 @@ RUST_VERSION="$(rustc --version)"
 DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 echo "════════════════════════════════════════"
-echo "BIEM Benchmark Report Generator"
+echo "Locus Benchmark Report Generator"
 echo "════════════════════════════════════════"
 echo "System: $OS $ARCH"
 echo "CPU:    $CPU"
@@ -50,12 +50,12 @@ echo ""
 # ── Build release ─────────────────────────────────────────────────
 echo "▸ Building release..."
 cd "$ROOT_DIR"
-cargo build --release -p biem-ingest 2>&1 | tail -3
+cargo build --release -p locus-ingest 2>&1 | tail -3
 
 # ── Run scale test ────────────────────────────────────────────────
 echo ""
 echo "▸ Running scale test (max $MAX_VALUE files)..."
-cargo run --release --bin biem-scale-test -- --max-files "$MAX_VALUE" \
+cargo run --release --bin locus-scale-test -- --max-files "$MAX_VALUE" \
     > "$OUT_DIR/scale.json" \
     2> >(tee "$OUT_DIR/scale.log" >&2)
 
@@ -65,7 +65,7 @@ echo "▸ Scale test complete. Results in $OUT_DIR/scale.json"
 # ── Run criterion benchmarks ─────────────────────────────────────
 echo ""
 echo "▸ Running criterion benchmarks..."
-cargo bench -p biem-ingest --bench ingest_bench 2>&1 | tee "$OUT_DIR/criterion.log"
+cargo bench -p locus-ingest --bench ingest_bench 2>&1 | tee "$OUT_DIR/criterion.log"
 
 echo ""
 echo "▸ Criterion complete."
@@ -101,7 +101,7 @@ for r in data:
 " 2>/dev/null || jq -c '.[]' "$OUT_DIR/scale.json")
 
 cat > "$OUT_DIR/REPORT.md" << REPORT_EOF
-# BIEM Performance Benchmarks
+# Locus Performance Benchmarks
 
 > **Generated**: ${DATE}
 > **Rust**: ${RUST_VERSION}
@@ -109,7 +109,7 @@ cat > "$OUT_DIR/REPORT.md" << REPORT_EOF
 
 ## Overview
 
-BIEM (Bit-Indexed External Memory) is a local-first indexing engine for LLMs.
+Locus is a local-first indexing engine for LLMs.
 These benchmarks measure end-to-end performance of the ingestion pipeline and
 query engine against synthetic Obsidian vaults of varying sizes.
 
@@ -217,10 +217,10 @@ The test vault is generated deterministically (seeded RNG) with:
 
 \`\`\`bash
 # Criterion benchmarks (statistical, ~5 min)
-cargo bench -p biem-ingest --bench ingest_bench
+cargo bench -p locus-ingest --bench ingest_bench
 
 # Scale test (single-pass, adjust --max-files as needed)
-cargo run --release --bin biem-scale-test -- --max-files 100000
+cargo run --release --bin locus-scale-test -- --max-files 100000
 
 # Full report generation
 ./scripts/bench-report.sh --max-files 100000
@@ -230,7 +230,7 @@ cargo run --release --bin biem-scale-test -- --max-files 100000
 
 ## Architecture Notes
 
-BIEM's performance characteristics stem from its design:
+Locus's performance characteristics stem from its design:
 
 1. **Roaring Bitmaps** for filter indices — bitwise AND/OR/NOT in microseconds
 2. **blake3 hashing** for change detection — cryptographic-speed hashing (~1GB/s)

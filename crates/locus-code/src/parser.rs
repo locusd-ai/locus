@@ -723,7 +723,7 @@ fn walk_ts_export(
     depth: u8,
     chunks: &mut Vec<Chunk>,
     tags: &mut Vec<String>,
-    imports: &mut Vec<LinkRef>,
+    _imports: &mut Vec<LinkRef>,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {

@@ -278,7 +278,6 @@ impl ConfluenceSource {
     }
 
     fn auth_header(&self) -> String {
-        use std::io::Write;
         let creds = format!("{}:{}", self.config.username, self.config.api_token);
         let encoded = base64_encode(creds.as_bytes());
         format!("Basic {encoded}")

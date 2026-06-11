@@ -1,6 +1,6 @@
-//! Shared types and error definitions for BIEM.
+//! Shared types and error definitions for Locus.
 //!
-//! This crate defines the core types used across all BIEM modules:
+//! This crate defines the core types used across all Locus modules:
 //! IDs, enums, chunk model, and the trait definitions for Registry
 //! and BitmapStore.
 

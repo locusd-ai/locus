@@ -60,7 +60,7 @@ No `source_type` field. The config assumes everything is a "vault" (Obsidian). A
 |--------|-------|------|
 | Add `Code` variant to `SourceType` | `locus-core/types.rs` | Start of Workstream 3 |
 | Rename `VaultEntry` → `SourceEntry`, add `source_type: SourceType` field | `locus-core/config.rs` | Start of Workstream 3 |
-| Rename `vaults` → `sources` in `BiemConfig` | `locus-core/config.rs` | Start of Workstream 3 |
+| Rename `vaults` → `sources` in `LocusConfig` | `locus-core/config.rs` | Start of Workstream 3 |
 | Rename CLI references from "vault" → "source" where generic | `locus-cli` | Start of Workstream 3 |
 | Rename config section `[vaults.*]` → `[sources.*]` | Config format | Breaking config change — needs migration note |
 | Update `001-system-overview.md` and `003-contracts.md` | Docs | Same PR |
@@ -183,7 +183,7 @@ This also aligns with `MatchPointer.auto_type` which is already a `String` in th
 
 **Phase 1 code** (`config.rs`):
 ```rust
-pub struct BiemConfig {
+pub struct LocusConfig {
     pub vaults: BTreeMap<String, VaultEntry>,
 }
 ```
@@ -210,7 +210,7 @@ The config struct has no fields for enrichment or semantic configuration.
 This is purely additive — no contradiction, just missing fields. Add when the relevant workstream starts:
 
 ```rust
-pub struct BiemConfig {
+pub struct LocusConfig {
     pub sources: BTreeMap<String, SourceEntry>,  // renamed from vaults
     pub enrichment: Option<EnrichmentConfig>,     // Workstream 1
     pub semantic: Option<SemanticConfig>,          // Workstream 2
@@ -323,7 +323,7 @@ These were checked and are fine:
 ### Workstream 1 start (enrichment)
 
 2. Add `Enrichment` and `Custom` variants to `BitmapCategory`
-3. Add `EnrichmentConfig` to `BiemConfig` (additive)
+3. Add `EnrichmentConfig` to `LocusConfig` (additive)
 
 ### Workstream 3 start (code intelligence)
 

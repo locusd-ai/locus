@@ -15,7 +15,7 @@ use locus_watcher::remote::{RemoteError, RemoteItem, RemoteSource};
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use serde::Deserialize;
-use tracing::{debug, warn};
+use tracing::debug;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 

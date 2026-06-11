@@ -20,7 +20,7 @@
 
 Locus is a **local indexing and filtering service**. It does not retrieve content — it tells you *where* the relevant content is and *why* it matched, then the consumer decides what to read.
 
-**Core goal: minimise context pollution.** LLMs degrade when given irrelevant context. BIEM's job is to ensure only the most structurally relevant pointers reach the model — not "here are 50 similar notes", but "here are the 3 notes that are tagged #work, typed as tasks, and linked to your current project". The bitmap pre-filter eliminates noise *before* any semantic or LLM processing, so the model's limited context window is spent on signal, not noise.
+**Core goal: minimise context pollution.** LLMs degrade when given irrelevant context. Locus's job is to ensure only the most structurally relevant pointers reach the model — not "here are 50 similar notes", but "here are the 3 notes that are tagged #work, typed as tasks, and linked to your current project". The bitmap pre-filter eliminates noise *before* any semantic or LLM processing, so the model's limited context window is spent on signal, not noise.
 
 ```mermaid
 graph LR
@@ -30,7 +30,7 @@ graph LR
         OTHER[("Confluence, etc.<br/>(future)")]
     end
 
-    subgraph BIEM["Locus Service"]
+    subgraph Locus["Locus Service"]
         IDX["Index Engine"]
         QE["Query Engine"]
     end
@@ -61,7 +61,7 @@ Eight modules, with clear separation between parsing, enrichment, and ingestion:
 
 ```mermaid
 graph TB
-    subgraph BIEM["Locus Service"]
+    subgraph Locus["Locus Service"]
         direction TB
 
         WATCH["Watcher<br/>─────────<br/>fs events → change queue"]
@@ -270,13 +270,13 @@ A filter for `tag:work` catches everything underneath without any traversal.
 
 ## 6. Interface Layer — Three Modes
 
-BIEM exposes the same query engine through three interfaces:
+Locus exposes the same query engine through three interfaces:
 
 ```mermaid
 graph TB
     subgraph Interface["Interface Layer"]
         direction LR
-        MCP["MCP Server<br/>─────────<br/>AI agents call BIEM<br/>as a tool"]
+        MCP["MCP Server<br/>─────────<br/>AI agents call Locus<br/>as a tool"]
         API["HTTP API<br/>─────────<br/>Obsidian plugin,<br/>scripts, webhooks"]
         CLI["CLI<br/>─────────<br/>Developer workflow,<br/>debugging, scripting"]
     end
@@ -290,7 +290,7 @@ graph TB
 
 | Mode | Use case | Why |
 |------|----------|-----|
-| **MCP** | AI agent calls `biem_search` as a tool | Primary AI integration. Agent gets pointers, decides what to read. |
+| **MCP** | AI agent calls `locus_search` as a tool | Primary AI integration. Agent gets pointers, decides what to read. |
 | **HTTP API** | Obsidian plugin, VS Code extension, scripts | Non-MCP integrations. Could power a sidebar showing "related notes by bitmap". |
 | **CLI** | `locus search --tag work --type task` | Debugging, shell pipelines, demos. Essential for development. |
 
@@ -400,7 +400,7 @@ See `003-contracts.md` §"Graph Layer" for all Rust trait and type signatures.
 
 ### 8.1 Configuration & State Directory
 
-BIEM uses a two-tier config model:
+Locus uses a two-tier config model:
 
 ```
 ~/.locus/                          # Global config
@@ -774,7 +774,7 @@ The CI/CD extreme is unrealistic for a local tool. But the compaction job (which
 
 ```mermaid
 gantt
-    title BIEM Phase 1 — Obsidian Core
+    title Locus Phase 1 — Obsidian Core
     dateFormat YYYY-MM-DD
     axisFormat Week %W
 

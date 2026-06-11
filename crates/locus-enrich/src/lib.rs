@@ -1,4 +1,4 @@
-//! Enrichment pipeline for BIEM.
+//! Enrichment pipeline for Locus.
 //!
 //! Provides the `TagPipeline` which orchestrates pluggable taggers
 //! to produce inferred bitmap keys from parse results.

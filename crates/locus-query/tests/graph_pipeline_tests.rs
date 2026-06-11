@@ -8,7 +8,7 @@ mod tests {
     use std::sync::Arc;
 
     use locus_bitmap::memory::InMemoryBitmapStore;
-    use locus_core::graph::{Direction, EdgeCategory, EdgeFilter, ExpandSpec, GraphQueryEngine};
+    use locus_core::graph::{Direction, EdgeFilter, ExpandSpec, GraphQueryEngine};
     use locus_core::query::Filter;
     use locus_core::semantic::{
         EmbeddingVector, EmbedError, Embedder, SemanticQueryRequest, VectorError, VectorStore,

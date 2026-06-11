@@ -1,4 +1,4 @@
-//! Performance benchmarks for the BIEM ingestion pipeline.
+//! Performance benchmarks for the Locus ingestion pipeline.
 //!
 //! Tests bulk_index, re-index (idempotent), single-event processing,
 //! and query performance at various vault sizes.
@@ -7,9 +7,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use std::time::Duration;
 
 use locus_bitmap::memory::InMemoryBitmapStore;
-use locus_core::bitmap::BitmapStore;
 use locus_core::query::{Filter, QueryEngine, QueryRequest};
-use locus_core::registry::Registry;
 use locus_core::types::{ChangeEvent, ChangeKind};
 use locus_ingest::vault_gen::{generate_vault, VaultConfig};
 use locus_ingest::IngestionPipeline;
