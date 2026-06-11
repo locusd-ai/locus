@@ -46,7 +46,7 @@ fn build_petgraph(
     let mut idx_to_doc: Vec<DocId> = Vec::new();
     let mut graph: Graph<DocId, f32> = Graph::new();
 
-    let mut get_or_add = |g: &mut Graph<DocId, f32>,
+    let get_or_add = |g: &mut Graph<DocId, f32>,
                           id_to_doc: &mut Vec<DocId>,
                           doc_to_id: &mut HashMap<DocId, petgraph::graph::NodeIndex>,
                           doc_id: DocId|

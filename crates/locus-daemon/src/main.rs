@@ -8,6 +8,7 @@ use tracing_subscriber::EnvFilter;
 
 use locus_bitmap::lmdb::LmdbBitmapStore;
 use locus_bitmap::memory::InMemoryBitmapStore;
+use locus_core::graph::GraphStore;
 use locus_core::types::ChangeEvent;
 use locus_ingest::IngestionPipeline;
 use locus_parser::markdown::MarkdownParser;
@@ -18,8 +19,9 @@ fn all_parsers() -> Vec<Box<dyn locus_core::parser::Parser>> {
     vec![Box::new(MarkdownParser), Box::new(CodeParser::new())]
 }
 
-use locus_query::BitmapQueryEngine;
+use locus_query::{BitmapQueryEngine, PetgraphQueryEngine};
 use locus_registry::duckdb::DuckDbRegistry;
+use locus_registry::graph::DuckDbGraphStore;
 use locus_registry::memory::InMemoryRegistry;
 use locus_watcher::{FsWatcher, FsWatcherConfig, SourceFeed};
 use rmcp::ServiceExt;
@@ -210,6 +212,26 @@ async fn main() -> Result<()> {
             if cli.semantic {
                 server = server.with_semantic(bitmap_engine.clone(), data_dir_resolved.clone());
                 info!("MCP locus_semantic tool enabled");
+            }
+
+            // Wire graph engine so locus_graph can answer traversal queries.
+            // Failure is non-fatal: the tool reports "graph engine not wired".
+            {
+                let db_path = data_dir_resolved.join("registry.duckdb");
+                match DuckDbRegistry::new(db_path.to_str().unwrap()) {
+                    Ok(graph_registry) => {
+                        let mut gs = DuckDbGraphStore::new(graph_registry.connection());
+                        match gs.rebuild_in_memory() {
+                            Ok(edge_count) => {
+                                let gs_arc: Arc<dyn GraphStore> = Arc::new(gs);
+                                server = server.with_graph(Arc::new(PetgraphQueryEngine::new(gs_arc)));
+                                info!(edge_count, "MCP locus_graph tool enabled");
+                            }
+                            Err(e) => warn!(error = %e, "graph rebuild failed — locus_graph disabled"),
+                        }
+                    }
+                    Err(e) => warn!(error = %e, "could not open registry for graph — locus_graph disabled"),
+                }
             }
 
             // Wire ingestion pipeline into MCP when webhook is enabled

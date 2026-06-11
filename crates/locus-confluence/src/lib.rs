@@ -393,7 +393,7 @@ fn base64_encode(bytes: &[u8]) -> String {
         let b0 = chunk[0] as usize;
         let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
         let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
-        out.push(CHARS[(b0 >> 2)] as char);
+        out.push(CHARS[b0 >> 2] as char);
         out.push(CHARS[((b0 & 3) << 4) | (b1 >> 4)] as char);
         if chunk.len() > 1 {
             out.push(CHARS[((b1 & 0xf) << 2) | (b2 >> 6)] as char);

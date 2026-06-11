@@ -77,10 +77,6 @@ impl<'a> Lexer<'a> {
         Self { input, pos: 0 }
     }
 
-    fn remaining(&self) -> &'a str {
-        &self.input[self.pos..]
-    }
-
     fn skip_whitespace(&mut self) {
         while self.pos < self.input.len()
             && self.input.as_bytes()[self.pos].is_ascii_whitespace()
