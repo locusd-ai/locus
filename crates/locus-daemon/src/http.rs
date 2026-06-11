@@ -511,7 +511,7 @@ mod tests {
         let chunks = registry
             .replace_chunks(
                 d1,
-                vec![locus_core::registry::NewChunk {
+                vec![NewChunk {
                     doc_id: d1,
                     kind: ChunkKind::Section,
                     byte_start: 0,

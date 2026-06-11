@@ -6,7 +6,6 @@ mod tests {
 
     use locus_bitmap::memory::InMemoryBitmapStore;
     use locus_code::CodeParser;
-    use locus_core::bitmap::BitmapStore;
     use locus_ingest::IngestionPipeline;
     use locus_registry::memory::InMemoryRegistry;
 
