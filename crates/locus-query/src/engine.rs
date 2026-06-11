@@ -8,8 +8,9 @@ use tracing::instrument;
 use locus_core::bitmap::BitmapStore;
 use locus_core::graph::{GraphQueryEngine, ExpandSpec};
 use locus_core::query::{
-    ChunkPointer, Filter, FilterEntry, IndexStatus, InspectResult as QueryInspectResult,
-    MatchPointer, QueryEngine, QueryError, QueryRequest, QueryResult,
+    nest_chunks, ChunkPointer, Filter, FilterEntry, IndexStatus,
+    InspectResult as QueryInspectResult, MatchPointer, QueryEngine, QueryError, QueryRequest,
+    QueryResult,
 };
 use locus_core::registry::{BitmapCatalogEntry, Registry};
 use locus_core::semantic::{
@@ -142,7 +143,7 @@ impl BitmapQueryEngine {
         };
 
         let chunks = self.registry.get_chunks(doc_id)?;
-        let chunk_ptrs: Vec<ChunkPointer> = chunks
+        let flat_ptrs: Vec<ChunkPointer> = chunks
             .into_iter()
             .map(|c| ChunkPointer {
                 chunk_id: c.chunk_id,
@@ -150,6 +151,8 @@ impl BitmapQueryEngine {
                 byte_start: c.byte_start,
                 byte_end: c.byte_end,
                 label: c.label,
+                depth: c.depth,
+                children: vec![],
             })
             .collect();
 
@@ -160,7 +163,7 @@ impl BitmapQueryEngine {
             doc_id,
             file_path: doc.file_path,
             source_type,
-            chunks: chunk_ptrs,
+            chunks: nest_chunks(flat_ptrs),
             matched_filters,
             auto_type,
             score: None,
@@ -400,7 +403,7 @@ impl QueryEngine for BitmapQueryEngine {
         };
 
         let chunks = self.registry.get_chunks(doc.doc_id)?;
-        let chunk_ptrs: Vec<ChunkPointer> = chunks
+        let flat_ptrs: Vec<ChunkPointer> = chunks
             .into_iter()
             .map(|c| ChunkPointer {
                 chunk_id: c.chunk_id,
@@ -408,8 +411,11 @@ impl QueryEngine for BitmapQueryEngine {
                 byte_start: c.byte_start,
                 byte_end: c.byte_end,
                 label: c.label,
+                depth: c.depth,
+                children: vec![],
             })
             .collect();
+        let chunk_ptrs = nest_chunks(flat_ptrs);
 
         // Find bitmap keys containing this doc
         let all_keys = self.bitmap_store.list_keys(None)?;
