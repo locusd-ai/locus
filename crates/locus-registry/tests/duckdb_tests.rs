@@ -195,3 +195,63 @@ fn schema_idempotent() {
     let _r1 = open_registry();
     let _r2 = open_registry();
 }
+
+// ── Pre-order chunk-range invariant (B1) ─────────────────────────
+
+#[test]
+fn chunk_range_and_doc_for_chunk() {
+    let mut r = open_registry();
+    let id_a = r.insert_doc(make_doc("a.md")).unwrap();
+    let id_b = r.insert_doc(make_doc("b.md")).unwrap();
+    let ids_a = r
+        .replace_chunks(id_a, vec![make_chunk(id_a), make_chunk(id_a), make_chunk(id_a)])
+        .unwrap();
+    let ids_b = r.replace_chunks(id_b, vec![make_chunk(id_b)]).unwrap();
+
+    let (start, end) = r.chunk_range(id_a).unwrap().unwrap();
+    assert_eq!((start, end), (ids_a[0], ids_a[2]));
+    assert_eq!(end - start + 1, 3, "run is contiguous");
+
+    assert_eq!(r.doc_for_chunk(ids_a[1]).unwrap(), Some(id_a));
+    assert_eq!(r.doc_for_chunk(ids_b[0]).unwrap(), Some(id_b));
+    assert_eq!(r.doc_for_chunk(ids_b[0] + 1000).unwrap(), None);
+}
+
+#[test]
+fn reindex_invalidates_old_range_duckdb() {
+    let mut r = open_registry();
+    let id = r.insert_doc(make_doc("a.md")).unwrap();
+    let old_ids = r.replace_chunks(id, vec![make_chunk(id)]).unwrap();
+    let new_ids = r
+        .replace_chunks(id, vec![make_chunk(id), make_chunk(id)])
+        .unwrap();
+
+    assert!(new_ids[0] > old_ids[0]);
+    assert_eq!(r.doc_for_chunk(old_ids[0]).unwrap(), None);
+    let (start, end) = r.chunk_range(id).unwrap().unwrap();
+    assert_eq!((start, end), (new_ids[0], new_ids[1]));
+}
+
+#[test]
+fn delete_doc_clears_chunk_range() {
+    let mut r = open_registry();
+    let id = r.insert_doc(make_doc("a.md")).unwrap();
+    let ids = r.replace_chunks(id, vec![make_chunk(id)]).unwrap();
+    r.delete_doc(id).unwrap();
+    assert!(r.chunk_range(id).unwrap().is_none());
+    assert_eq!(r.doc_for_chunk(ids[0]).unwrap(), None);
+}
+
+#[test]
+fn get_chunks_for_docs_single_query_ordering() {
+    let mut r = open_registry();
+    let id_a = r.insert_doc(make_doc("a.md")).unwrap();
+    let id_b = r.insert_doc(make_doc("b.md")).unwrap();
+    r.replace_chunks(id_a, vec![make_chunk(id_a), make_chunk(id_a)]).unwrap();
+    r.replace_chunks(id_b, vec![make_chunk(id_b)]).unwrap();
+
+    let all = r.get_chunks_for_docs(&[id_b, id_a]).unwrap();
+    assert_eq!(all.len(), 3);
+    assert!(all.windows(2).all(|w| w[0].chunk_id < w[1].chunk_id));
+    assert!(r.get_chunks_for_docs(&[]).unwrap().is_empty());
+}

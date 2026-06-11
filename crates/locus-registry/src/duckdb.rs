@@ -111,9 +111,30 @@ impl DuckDbRegistry {
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_doc_links_pending_target ON doc_links_pending(target_ref);
+
+                CREATE TABLE IF NOT EXISTS doc_chunk_ranges (
+                    doc_id      UINTEGER PRIMARY KEY,
+                    chunk_start UINTEGER NOT NULL,
+                    chunk_end   UINTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_doc_chunk_ranges_range
+                    ON doc_chunk_ranges(chunk_start, chunk_end);
                 ",
             )
             .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        // Migration backfill: populate doc_chunk_ranges for any docs whose range
+        // row is missing (handles databases created before B1 was deployed).
+        self.conn()
+            .execute_batch(
+                "INSERT OR IGNORE INTO doc_chunk_ranges (doc_id, chunk_start, chunk_end)
+                 SELECT doc_id, MIN(chunk_id), MAX(chunk_id)
+                 FROM chunks
+                 GROUP BY doc_id;",
+            )
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
         Ok(())
     }
 
@@ -464,8 +485,10 @@ impl Registry for DuckDbRegistry {
 
     fn delete_doc(&mut self, doc_id: DocId) -> Result<(), RegistryError> {
         let conn = self.conn();
-        // Delete chunks first (foreign key dependency)
+        // Delete chunks and range index first
         conn.execute("DELETE FROM chunks WHERE doc_id = ?", params![doc_id])
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        conn.execute("DELETE FROM doc_chunk_ranges WHERE doc_id = ?", params![doc_id])
             .map_err(|e| RegistryError::Database(e.to_string()))?;
         let affected = conn
             .execute("DELETE FROM documents WHERE doc_id = ?", params![doc_id])
@@ -495,11 +518,14 @@ impl Registry for DuckDbRegistry {
             return Err(RegistryError::NotFound(doc_id));
         }
 
-        // Delete old chunks
+        // Delete old chunks and their range row
         conn.execute("DELETE FROM chunks WHERE doc_id = ?", params![doc_id])
             .map_err(|e| RegistryError::Database(e.to_string()))?;
+        conn.execute("DELETE FROM doc_chunk_ranges WHERE doc_id = ?", params![doc_id])
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
 
-        let mut chunk_id = Self::next_chunk_id_from(&conn)?;
+        let chunk_start = Self::next_chunk_id_from(&conn)?;
+        let mut chunk_id = chunk_start;
         let mut ids = Vec::with_capacity(chunks.len());
 
         for c in &chunks {
@@ -523,6 +549,17 @@ impl Registry for DuckDbRegistry {
         )
         .map_err(|e| RegistryError::Database(e.to_string()))?;
 
+        // Maintain doc_chunk_ranges — only if at least one chunk was inserted
+        if !ids.is_empty() {
+            let chunk_end = chunk_id - 1; // inclusive end of the new run
+            conn.execute(
+                "INSERT OR REPLACE INTO doc_chunk_ranges (doc_id, chunk_start, chunk_end)
+                 VALUES (?, ?, ?)",
+                params![doc_id, chunk_start, chunk_end],
+            )
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        }
+
         Ok(ids)
     }
 
@@ -537,6 +574,88 @@ impl Registry for DuckDbRegistry {
 
         let rows = stmt
             .query_map(params![doc_id], |row| {
+                let kind_str: String = row.get(2)?;
+                let label: Option<String> = row.get(5)?;
+                let meta_json: Option<String> = row.get(7)?;
+
+                Ok(ChunkRecord {
+                    chunk_id: row.get(0)?,
+                    doc_id: row.get(1)?,
+                    kind: DuckDbRegistry::str_to_chunk_kind(&kind_str),
+                    byte_start: row.get(3)?,
+                    byte_end: row.get(4)?,
+                    label,
+                    depth: row.get(6)?,
+                    metadata: meta_json
+                        .map(|j| DuckDbRegistry::json_to_metadata(&j))
+                        .unwrap_or_default(),
+                })
+            })
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| RegistryError::Database(e.to_string()))?);
+        }
+        Ok(results)
+    }
+
+    fn chunk_range(&self, doc_id: DocId) -> Result<Option<(ChunkId, ChunkId)>, RegistryError> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare("SELECT chunk_start, chunk_end FROM doc_chunk_ranges WHERE doc_id = ?")
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        let mut rows = stmt
+            .query_map(params![doc_id], |row| {
+                Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
+            })
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row.map_err(|e| RegistryError::Database(e.to_string()))?)),
+            None => Ok(None),
+        }
+    }
+
+    fn doc_for_chunk(&self, chunk_id: ChunkId) -> Result<Option<DocId>, RegistryError> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT doc_id FROM doc_chunk_ranges
+                 WHERE chunk_start <= ? AND chunk_end >= ?",
+            )
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        let mut rows = stmt
+            .query_map(params![chunk_id, chunk_id], |row| row.get::<_, u32>(0))
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(row.map_err(|e| RegistryError::Database(e.to_string()))?)),
+            None => Ok(None),
+        }
+    }
+
+    fn get_chunks_for_docs(&self, doc_ids: &[DocId]) -> Result<Vec<ChunkRecord>, RegistryError> {
+        if doc_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let conn = self.conn();
+        let placeholders = vec!["?"; doc_ids.len()].join(", ");
+        let sql = format!(
+            "SELECT chunk_id, doc_id, kind, byte_start, byte_end, label, depth, metadata_json
+             FROM chunks WHERE doc_id IN ({placeholders}) ORDER BY chunk_id"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+
+        let params_vec: Vec<&dyn duckdb::ToSql> =
+            doc_ids.iter().map(|id| id as &dyn duckdb::ToSql).collect();
+
+        let rows = stmt
+            .query_map(params_vec.as_slice(), |row| {
                 let kind_str: String = row.get(2)?;
                 let label: Option<String> = row.get(5)?;
                 let meta_json: Option<String> = row.get(7)?;

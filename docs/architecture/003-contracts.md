@@ -303,12 +303,28 @@ pub trait Registry: Send + Sync {
     fn delete_doc(&mut self, doc_id: DocId) -> Result<(), RegistryError>;
 
     // --- Chunk operations ---
+    //
+    // PRE-ORDER INVARIANT: chunk ids within a document are contiguous and
+    // strictly ascending in document (byte) order. Each replace_chunks call
+    // assigns a fresh contiguous run and records its [start, end] range, so
+    // doc⇄chunk resolution is a range lookup, not a table scan.
 
     /// Replace all chunks for a document (delete old, insert new).
+    /// Assigns a fresh contiguous run of ChunkIds (pre-order invariant).
     fn replace_chunks(&mut self, doc_id: DocId, chunks: Vec<NewChunk>) -> Result<Vec<ChunkId>, RegistryError>;
 
-    /// Get all chunks for a document.
+    /// Get all chunks for a document, ordered by chunk_id (= document order).
     fn get_chunks(&self, doc_id: DocId) -> Result<Vec<ChunkRecord>, RegistryError>;
+
+    /// Inclusive [start, end] of the document's current chunk run, if any.
+    fn chunk_range(&self, doc_id: DocId) -> Result<Option<(ChunkId, ChunkId)>, RegistryError>;
+
+    /// Reverse lookup: the document owning this chunk id (range scan).
+    fn doc_for_chunk(&self, chunk_id: ChunkId) -> Result<Option<DocId>, RegistryError>;
+
+    /// Batched chunk fetch for many documents in one call, ordered by chunk_id.
+    /// Default impl loops get_chunks; DuckDbRegistry overrides with one SQL IN query.
+    fn get_chunks_for_docs(&self, doc_ids: &[DocId]) -> Result<Vec<ChunkRecord>, RegistryError>;
 
     // --- Bitmap catalog ---
 

@@ -73,6 +73,23 @@ pub struct NewChunk {
 
 /// Pluggable storage backend for document metadata, chunks, and bitmap catalog.
 /// DuckDB is the first implementation.
+///
+/// ## PRE-ORDER INVARIANT
+///
+/// Chunk ids within a single document are **contiguous and strictly ascending**
+/// in document (byte) order.  Every call to `replace_chunks` atomically assigns a
+/// fresh contiguous run of `ChunkId`s (starting at `global_state.next_chunk_id`)
+/// and stores the inclusive `[chunk_start, chunk_end]` range so it can be queried
+/// in O(1) without touching the chunks table.
+///
+/// Consequences:
+/// - `doc_for_chunk(id)` can be answered by a single range-scan on the
+///   `doc_chunk_ranges` table — no full chunks table scan required.
+/// - Re-indexing a document **invalidates** its old range; old chunk ids no longer
+///   resolve to that document via `doc_for_chunk`.
+/// - Third-party implementations that do not yet maintain `doc_chunk_ranges` can
+///   rely on the default `get_chunks_for_docs` impl, which falls back to one
+///   `get_chunks` call per document.
 pub trait Registry: Send + Sync {
     // --- Document operations ---
 
@@ -108,14 +125,59 @@ pub trait Registry: Send + Sync {
     // --- Chunk operations ---
 
     /// Replace all chunks for a document (delete old, insert new).
+    ///
+    /// Implementations MUST maintain the PRE-ORDER INVARIANT: assign a single
+    /// contiguous monotonically increasing run of ChunkIds starting at
+    /// `global_state.next_chunk_id`, and record the resulting
+    /// `[chunk_start, chunk_end]` range in `doc_chunk_ranges` (or the equivalent
+    /// in-memory structure).
     fn replace_chunks(
         &mut self,
         doc_id: DocId,
         chunks: Vec<NewChunk>,
     ) -> Result<Vec<ChunkId>, RegistryError>;
 
-    /// Get all chunks for a document.
+    /// Get all chunks for a document, ordered by chunk_id (= document byte order).
     fn get_chunks(&self, doc_id: DocId) -> Result<Vec<ChunkRecord>, RegistryError>;
+
+    /// Return the inclusive `[chunk_start, chunk_end]` range for a document's
+    /// current chunk run, or `None` if the document has no chunks.
+    ///
+    /// This is an O(1) lookup against the pre-order range index; it does **not**
+    /// scan the chunks table.
+    fn chunk_range(&self, doc_id: DocId) -> Result<Option<(ChunkId, ChunkId)>, RegistryError>;
+
+    /// Reverse lookup: given a ChunkId, return the DocId that owns it.
+    ///
+    /// Returns `None` if no document's current chunk range includes `chunk_id`.
+    /// Because chunk ranges are contiguous, this is a single range-scan.
+    ///
+    /// Note: after `replace_chunks` the old chunk ids no longer resolve to the
+    /// document — only the most-recent run is tracked.
+    fn doc_for_chunk(&self, chunk_id: ChunkId) -> Result<Option<DocId>, RegistryError>;
+
+    /// Fetch all chunks for the given documents in a single call, ordered by
+    /// `chunk_id` (which equals document byte order within each doc).
+    ///
+    /// The default implementation loops over `get_chunks` so third-party
+    /// implementations keep working without changes.  `DuckDbRegistry` overrides
+    /// this with a single SQL `IN (…)` query for efficiency.
+    fn get_chunks_for_docs(
+        &self,
+        doc_ids: &[DocId],
+    ) -> Result<Vec<ChunkRecord>, RegistryError> {
+        if doc_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut all: Vec<ChunkRecord> = Vec::new();
+        for &doc_id in doc_ids {
+            let mut chunks = self.get_chunks(doc_id)?;
+            all.append(&mut chunks);
+        }
+        // Sort by chunk_id so the caller sees a globally ordered stream.
+        all.sort_by_key(|c| c.chunk_id);
+        Ok(all)
+    }
 
     // --- Bitmap catalog ---
 

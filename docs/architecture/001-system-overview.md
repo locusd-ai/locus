@@ -219,9 +219,24 @@ erDiagram
         bytes tombstone_bitmap_ref
     }
 
+    DOC_CHUNK_RANGES {
+        u32 doc_id PK
+        u32 chunk_start "inclusive — first chunk id of current run"
+        u32 chunk_end "inclusive — last chunk id of current run"
+    }
+
     DOCUMENTS ||--o{ CHUNKS : "has"
+    DOCUMENTS ||--|| DOC_CHUNK_RANGES : "current run"
     BITMAP_CATALOG ||--|| LMDB_STORE : "references"
 ```
+
+**Pre-order chunk-id invariant**: chunk ids within a document are contiguous
+and strictly ascending in document (byte) order. `replace_chunks` always
+assigns a fresh contiguous run and records it in `doc_chunk_ranges`, so
+`chunk_id → doc_id` resolution and "all chunks of doc X" are O(1) range
+lookups instead of table scans. This is the foundation for chunk-level
+bitmaps: a document — and any heading/scope subtree — is a contiguous
+chunk-id interval, which Roaring bitmaps intersect cheaply.
 
 ### File move handling
 
