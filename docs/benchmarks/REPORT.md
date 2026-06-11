@@ -25,7 +25,7 @@ Finding "all notes tagged `work`" can be done seven different ways. Here's the f
 | **HashSet inverted index** | O(n) parse | O(1) lookup, O(min) intersect | ✗ | `.intersection()` | ✗ |
 | **Graph (petgraph)** | O(n) parse | O(degree) neighbor walk | ✗ | Neighbor-set intersection | Possible via edges |
 | **SQL (DuckDB)** | O(n) insert | Query planner | ✓ | SQL WHERE clauses | ✗ |
-| **BIEM (Roaring Bitmaps)** | O(n) parse + index | O(1) bitmap ops | ✓ | First-class AND/OR/NOT | ✓ (chunk pointers) |
+| **Locus (Roaring Bitmaps)** | O(n) parse + index | O(1) bitmap ops | ✓ | First-class AND/OR/NOT | ✓ (chunk pointers) |
 
 ---
 
@@ -33,7 +33,7 @@ Finding "all notes tagged `work`" can be done seven different ways. Here's the f
 
 ### Single-key query ("find all notes with tag `work`")
 
-| Files | grep | parse+filter | HashMap | HashSet | Graph | SQL (DuckDB) | **BIEM** |
+| Files | grep | parse+filter | HashMap | HashSet | Graph | SQL (DuckDB) | **Locus** |
 |------:|-----:|-------------:|--------:|--------:|------:|-------------:|---------:|
 | 100 | 1,250µs | 3,122µs | <1µs | <1µs | <1µs | 223µs | **9µs** |
 | 500 | 5,941µs | 15,013µs | <1µs | <1µs | <1µs | 346µs | **16µs** |
@@ -45,7 +45,7 @@ Finding "all notes tagged `work`" can be done seven different ways. Here's the f
 
 ### AND query ("find notes with tag `project` AND source `obsidian`")
 
-| Files | HashSet ∩ | Graph ∩ | SQL AND | **BIEM AND** |
+| Files | HashSet ∩ | Graph ∩ | SQL AND | **Locus AND** |
 |------:|----------:|--------:|--------:|-------------:|
 | 100 | <1µs | 3µs | 439µs | **9µs** |
 | 500 | <1µs | 18µs | 738µs | **17µs** |
@@ -69,38 +69,38 @@ An LLM running 10 filter queries during a conversation would wait **19 seconds**
 
 ### Tier 2: In-memory indexes (HashMap, HashSet)
 
-For **single-key lookups**, HashMap and HashSet are the fastest possible — sub-microsecond. BIEM can't beat a raw hash lookup.
+For **single-key lookups**, HashMap and HashSet are the fastest possible — sub-microsecond. Locus can't beat a raw hash lookup.
 
-But for **compound queries** (AND/OR/NOT), HashSet intersection scales with set size. At 100K files, HashSet AND takes 111µs vs BIEM's constant 19µs. The gap widens at scale because Roaring Bitmaps use compressed bit-level operations instead of per-element iteration.
+But for **compound queries** (AND/OR/NOT), HashSet intersection scales with set size. At 100K files, HashSet AND takes 111µs vs Locus's constant 19µs. The gap widens at scale because Roaring Bitmaps use compressed bit-level operations instead of per-element iteration.
 
-The real disadvantage: **no persistence, no structure**. You rebuild the index every time you restart. BIEM's index persists across sessions and returns chunk-level structural pointers (byte ranges, heading depth, chunk kind) — not just file paths.
+The real disadvantage: **no persistence, no structure**. You rebuild the index every time you restart. Locus's index persists across sessions and returns chunk-level structural pointers (byte ranges, heading depth, chunk kind) — not just file paths.
 
 ### Tier 3: Graph (petgraph)
 
-A property graph (doc nodes ↔ tag nodes, with edges) is the natural model for Obsidian's link-heavy data. Single-key queries (find all neighbors of a tag node) are fast at small scale but **scale linearly** with result set size — at 100K files, a single-key graph query takes 58µs vs BIEM's constant 16µs.
+A property graph (doc nodes ↔ tag nodes, with edges) is the natural model for Obsidian's link-heavy data. Single-key queries (find all neighbors of a tag node) are fast at small scale but **scale linearly** with result set size — at 100K files, a single-key graph query takes 58µs vs Locus's constant 16µs.
 
-The real pain is **AND queries**: collecting neighbors of two nodes into HashSets and intersecting them is O(n₁ + n₂). At 100K files, graph AND takes **4,075µs** — **214× slower** than BIEM's 19µs. This is because one of the sets (`source:obsidian`) contains all 100K docs, forcing a full iteration.
+The real pain is **AND queries**: collecting neighbors of two nodes into HashSets and intersecting them is O(n₁ + n₂). At 100K files, graph AND takes **4,075µs** — **214× slower** than Locus's 19µs. This is because one of the sets (`source:obsidian`) contains all 100K docs, forcing a full iteration.
 
-**Build cost** also matters: constructing a petgraph from parsed files takes longer than BIEM's bulk_index:
+**Build cost** also matters: constructing a petgraph from parsed files takes longer than Locus's bulk_index:
 
-| Files | Graph build | BIEM index | Graph / BIEM |
+| Files | Graph build | Locus index | Graph / Locus |
 |------:|------------:|-----------:|-------------:|
 | 1,000 | 29ms | 40ms | 0.7× |
 | 10,000 | 394ms | 422ms | 0.9× |
 | 50,000 | 2,034ms | 2,446ms | 0.8× |
 | 100,000 | 4,075ms | 5,081ms | 0.8× |
 
-Graph build is ~20% faster (no bitmap serialisation), but this is a one-time cost and the graph has **no persistence** — you rebuild every restart. BIEM persists to LMDB.
+Graph build is ~20% faster (no bitmap serialisation), but this is a one-time cost and the graph has **no persistence** — you rebuild every restart. Locus persists to LMDB.
 
-Graphs shine at **traversal** queries (shortest path, reachability, "what's 2 hops from this note?") — queries BIEM doesn't attempt. For filter queries, a graph is strictly worse than bitmaps.
+Graphs shine at **traversal** queries (shortest path, reachability, "what's 2 hops from this note?") — queries Locus doesn't attempt. For filter queries, a graph is strictly worse than bitmaps.
 
 ### Tier 4: SQL (DuckDB)
 
-SQL handles persistence and combinators, but at **15–250× the query cost** of BIEM for compound queries. DuckDB's query planner, parser, and row-by-row result materialisation add overhead that bitmap operations avoid entirely. At 100K files, SQL AND takes 4,758µs vs BIEM's 19µs.
+SQL handles persistence and combinators, but at **15–250× the query cost** of Locus for compound queries. DuckDB's query planner, parser, and row-by-row result materialisation add overhead that bitmap operations avoid entirely. At 100K files, SQL AND takes 4,758µs vs Locus's 19µs.
 
-### Tier 5: BIEM
+### Tier 5: Locus
 
-BIEM sits in a unique spot:
+Locus sits in a unique spot:
 - **Constant-time** queries like HashMap/HashSet (~16µs single, ~19µs AND at 100K)
 - **Built-in AND/OR/NOT** with no per-element overhead (compressed bitmaps)
 - **Persistent storage** (LMDB-backed bitmaps survive restarts)
@@ -173,19 +173,19 @@ Statistical benchmarks with warm-up, multiple samples, and outlier detection.
 
 ### Why not just use a HashMap?
 
-A HashMap gives you O(1) single-key lookup (faster than BIEM for that case). But:
+A HashMap gives you O(1) single-key lookup (faster than Locus for that case). But:
 
 1. **AND/OR/NOT** — with HashSets you iterate per-element; Roaring does it on compressed bit blocks
-2. **Persistence** — HashMap rebuilds from scratch every restart; BIEM persists to LMDB
+2. **Persistence** — HashMap rebuilds from scratch every restart; Locus persists to LMDB
 3. **Structure** — HashMap returns file paths; Locus returns chunk-level pointers with byte ranges
-4. **Tombstoning** — BIEM handles deleted files via tombstone bitmaps; HashMap requires full rebuild
+4. **Tombstoning** — Locus handles deleted files via tombstone bitmaps; HashMap requires full rebuild
 
 ### Why not just use SQL?
 
-DuckDB is excellent (BIEM uses it for the registry). But for **filter resolution**:
+DuckDB is excellent (Locus uses it for the registry). But for **filter resolution**:
 
 - SQL parses the query string, builds a plan, and materialises rows (~200–3,000µs)
-- BIEM does a direct bitmap AND/OR (~16µs)
+- Locus does a direct bitmap AND/OR (~16µs)
 
 That's 15–190× faster. For an LLM making many filter calls per conversation, this compounds.
 
@@ -203,9 +203,9 @@ All baselines run on the same generated vault with warmed filesystem caches.
 | **HashSet** | Pre-built `HashMap<tag, HashSet<u32>>`, `.intersection()` | Median of 100 |
 | **Graph** | Pre-built petgraph (undirected, doc↔tag nodes), `.neighbors()` + intersection | Avg of 100 (batched) |
 | **SQL** | In-memory DuckDB with `doc_tags` table + index, `SELECT ... WHERE` | Median of 100 |
-| **BIEM** | `BitmapQueryEngine::query` with Roaring Bitmap ops | Median of 100 |
+| **Locus** | `BitmapQueryEngine::query` with Roaring Bitmap ops | Median of 100 |
 
-Build cost for HashMap/HashSet/Graph/SQL/Locus is **excluded** from query timing — we're comparing lookup speed only. BIEM's build cost (bulk_index) is reported separately.
+Build cost for HashMap/HashSet/Graph/SQL/Locus is **excluded** from query timing — we're comparing lookup speed only. Locus's build cost (bulk_index) is reported separately.
 
 ## Synthetic Vault Generator
 

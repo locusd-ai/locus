@@ -457,7 +457,7 @@ fn cmd_init(path: &PathBuf, local: bool, source_type_str: &str) -> Result<()> {
     };
 
     let locus_dir = config::default_config_dir()
-        .context("could not determine BIEM config directory")?;
+        .context("could not determine Locus config directory")?;
     let mut cfg = config::load_config().unwrap_or_default();
 
     let storage = if local { StorageMode::Local } else { StorageMode::Global };

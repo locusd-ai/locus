@@ -301,7 +301,7 @@ fn bench_baseline_hashmap(vault_root: &std::path::Path) -> u64 {
 }
 
 fn bench_baseline_hashset(vault_root: &std::path::Path) -> (u64, u64) {
-    // Build an inverted index: tag → HashSet<u32> (doc IDs, like BIEM but without Roaring)
+    // Build an inverted index: tag → HashSet<u32> (doc IDs, like Locus but without Roaring)
     let parser = MarkdownParser;
     let mut files = Vec::new();
     collect_md_files(vault_root, &mut files);

@@ -6,7 +6,7 @@
 
 ## Goals
 
-Phase 2 transforms BIEM from an Obsidian-only structural index into a **multi-source enriched pointer system**. Three workstreams run in parallel:
+Phase 2 transforms Locus from an Obsidian-only structural index into a **multi-source enriched pointer system**. Three workstreams run in parallel:
 
 1. **Enrichment pipeline** — pluggable taggers (builtin, LLM, custom) that infer semantic metadata and cache it per file hash
 2. **Semantic layer** — vector embeddings as a complement to bitmap filtering, with bitmaps as pre-filter
@@ -227,7 +227,7 @@ Bitmaps answer "which docs match these structural/semantic tags?" — vectors an
 User query: "How does retry logic work in the payments service?"
   │
   ▼
-BIEM bitmap pre-filter (19µs):
+Locus bitmap pre-filter (19µs):
   concept:retry-logic AND source:repo:payments AND kind:function
   → 6 doc IDs
   │
@@ -350,7 +350,7 @@ The key contract: **bitmap filter is mandatory for semantic queries**. There is 
 - [ ] Add `search_within` to vector store (bitmap-scoped search)
 - [ ] Implement `FastEmbedReranker` (optional cross-encoder)
 - [ ] `locus search --semantic "query text" --filter "tag:X"` CLI
-- [ ] MCP tool: `biem_semantic_search`
+- [ ] MCP tool: `locus_semantic_search`
 - [ ] HTTP: `POST /search/semantic`
 - [ ] Benchmarks: latency and recall — bitmap-only vs bitmap+vector vs vector-only
 - [ ] Config: `[semantic]` section in `config.toml` (embedder, vector store, reranker)
@@ -444,12 +444,12 @@ pub enum ChunkKind {
 | HCL (Terraform) | `tree-sitter-hcl` | P2 (infra) |
 | SQL | `tree-sitter-sql` | P2 (schema) |
 
-### 3.5 `.biemignore`
+### 3.5 `.locusignore`
 
 Same syntax as `.gitignore`, checked before parsing:
 
 ```
-# .biemignore
+# .locusignore
 target/
 node_modules/
 dist/
@@ -467,7 +467,7 @@ __pycache__/
 - [ ] Python grammar: function, class, import, decorator extraction
 - [ ] Extended `ChunkKind` variants in `locus-core`
 - [ ] Code-specific bitmap key generation (lang, kind, visibility, async, import)
-- [ ] `.biemignore` loader and path filtering
+- [ ] `.locusignore` loader and path filtering
 - [ ] `locus init <path> --type code` CLI command
 - [ ] Multi-repo registration in config (repo name → path mapping)
 - [ ] Integration test: index a Rust crate, query by `lang:rust AND kind:function AND visibility:public`
@@ -564,7 +564,7 @@ gantt
     TypeScript grammar                              :c3, after c2, 1w
     Python grammar                                  :c4, after c3, 1w
     Code bitmap key generation                      :c5, after c2, 1w
-    .biemignore                                     :c6, after c1, 1w
+    .locusignore                                    :c6, after c1, 1w
     locus init --type code                           :c7, after c5, 1w
     Multi-repo registration                         :c8, after c7, 1w
 ```
@@ -591,7 +591,7 @@ Phase 2 is complete when:
 
 1. **Enrichment**: `locus search --filter "concept:auth AND team:payments"` returns results on an Obsidian vault with LLM tagger + custom tagger
 2. **Vectors**: `locus search --semantic "retry logic" --filter "kind:function"` returns scored chunk pointers with bitmap pre-filtering
-3. **Code**: `locus init ~/repos/locusd --type code` indexes BIEM itself, and `locus search --filter "lang:rust AND kind:function AND visibility:public"` returns correct results
+3. **Code**: `locus init ~/repos/locusd --type code` indexes Locus itself, and `locus search --filter "lang:rust AND kind:function AND visibility:public"` returns correct results
 4. **Performance**: enriched index (builtin taggers) at >15K files/s; semantic query <50ms; code parsing >10K files/s
 5. **Cache**: second run of `locus enrich` on unchanged files hits cache, completes at Phase 1 speed
 6. **All Phase 1 tests still pass** — no regressions

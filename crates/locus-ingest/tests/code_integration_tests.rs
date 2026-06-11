@@ -7,9 +7,7 @@ mod tests {
 
     use locus_bitmap::memory::InMemoryBitmapStore;
     use locus_code::CodeParser;
-    use locus_core::bitmap::BitmapStore;
     use locus_core::query::{Filter, QueryEngine, QueryRequest};
-    use locus_core::registry::Registry;
     use locus_ingest::IngestionPipeline;
     use locus_parser::markdown::MarkdownParser;
     use locus_query::BitmapQueryEngine;

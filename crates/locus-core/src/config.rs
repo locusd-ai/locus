@@ -1,4 +1,4 @@
-//! Configuration and source registration for BIEM.
+//! Configuration and source registration for Locus.
 //!
 //! Global config lives at `~/.locus/config.toml`. Each registered source
 //! gets its own state directory containing registry (DuckDB) and bitmaps (LMDB).
@@ -12,9 +12,9 @@ use crate::types::SourceType;
 
 // ── Types ────────────────────────────────────────────────────────
 
-/// Top-level BIEM configuration.
+/// Top-level Locus configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct BiemConfig {
+pub struct LocusConfig {
     /// Registered filesystem sources, keyed by a human-friendly name.
     #[serde(default)]
     pub sources: BTreeMap<String, SourceEntry>,
@@ -75,7 +75,7 @@ impl RemoteSourceEntry {
     }
 }
 
-impl BiemConfig {
+impl LocusConfig {
     /// Merge legacy `vaults` entries into `sources` (for config migration).
     pub fn migrate_legacy(&mut self) {
         for (k, v) in std::mem::take(&mut self.vaults_compat) {
@@ -149,7 +149,7 @@ impl From<SourceType> for SourceTypeConfig {
     }
 }
 
-/// Where to store BIEM state for a source.
+/// Where to store Locus state for a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageMode {
@@ -180,31 +180,31 @@ pub enum ConfigError {
 
 // ── Functions ────────────────────────────────────────────────────
 
-/// Returns the default global BIEM config directory (`~/.locus/`).
+/// Returns the default global Locus config directory (`~/.locus/`).
 pub fn default_config_dir() -> Result<PathBuf, ConfigError> {
     let home = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?;
     Ok(home.join(".locus"))
 }
 
 /// Load config from a specific directory. Returns default if file doesn't exist.
-pub fn load_config_from(config_dir: &Path) -> Result<BiemConfig, ConfigError> {
+pub fn load_config_from(config_dir: &Path) -> Result<LocusConfig, ConfigError> {
     let path = config_dir.join("config.toml");
     if !path.exists() {
-        return Ok(BiemConfig::default());
+        return Ok(LocusConfig::default());
     }
     let contents = std::fs::read_to_string(&path)?;
-    let mut config: BiemConfig = toml::from_str(&contents)?;
+    let mut config: LocusConfig = toml::from_str(&contents)?;
     config.migrate_legacy();
     Ok(config)
 }
 
 /// Load config from the default location (`~/.locus/config.toml`).
-pub fn load_config() -> Result<BiemConfig, ConfigError> {
+pub fn load_config() -> Result<LocusConfig, ConfigError> {
     load_config_from(&default_config_dir()?)
 }
 
 /// Save config to a specific directory. Creates the directory if needed.
-pub fn save_config_to(config: &BiemConfig, config_dir: &Path) -> Result<(), ConfigError> {
+pub fn save_config_to(config: &LocusConfig, config_dir: &Path) -> Result<(), ConfigError> {
     std::fs::create_dir_all(config_dir)?;
     let path = config_dir.join("config.toml");
     let contents = toml::to_string_pretty(config)?;
@@ -213,7 +213,7 @@ pub fn save_config_to(config: &BiemConfig, config_dir: &Path) -> Result<(), Conf
 }
 
 /// Save config to the default location (`~/.locus/config.toml`).
-pub fn save_config(config: &BiemConfig) -> Result<(), ConfigError> {
+pub fn save_config(config: &LocusConfig) -> Result<(), ConfigError> {
     save_config_to(config, &default_config_dir()?)
 }
 
@@ -233,7 +233,7 @@ fn derive_source_name(source_path: &Path) -> String {
 }
 
 /// Ensure the source name is unique in the config, appending a suffix if needed.
-fn unique_source_name(base: &str, config: &BiemConfig) -> String {
+fn unique_source_name(base: &str, config: &LocusConfig) -> String {
     if !config.sources.contains_key(base) {
         return base.to_string();
     }
@@ -253,7 +253,7 @@ pub fn register_source(
     source_type: SourceType,
     storage: StorageMode,
     locus_dir: &Path,
-    config: &mut BiemConfig,
+    config: &mut LocusConfig,
 ) -> Result<(String, SourceEntry), ConfigError> {
     let canonical = source_path.canonicalize().map_err(ConfigError::Io)?;
 
@@ -285,7 +285,7 @@ pub fn register_source(
 }
 
 /// Find a source entry by its path (canonicalized).
-pub fn resolve_source(source_path: &Path, config: &BiemConfig) -> Result<SourceEntry, ConfigError> {
+pub fn resolve_source(source_path: &Path, config: &LocusConfig) -> Result<SourceEntry, ConfigError> {
     let canonical = source_path.canonicalize().map_err(ConfigError::Io)?;
 
     for entry in config.sources.values() {
@@ -300,7 +300,7 @@ pub fn resolve_source(source_path: &Path, config: &BiemConfig) -> Result<SourceE
 }
 
 /// Remove a source from the config by path. Does NOT delete the state directory.
-pub fn remove_source(source_path: &Path, config: &mut BiemConfig) -> Result<String, ConfigError> {
+pub fn remove_source(source_path: &Path, config: &mut LocusConfig) -> Result<String, ConfigError> {
     let canonical = source_path.canonicalize().map_err(ConfigError::Io)?;
 
     let name = config
@@ -327,7 +327,7 @@ pub fn register_remote_source(
     name: &str,
     mut entry: RemoteSourceEntry,
     locus_dir: &Path,
-    config: &mut BiemConfig,
+    config: &mut LocusConfig,
 ) -> Result<(), ConfigError> {
     if config.remote_sources.contains_key(name) {
         return Err(ConfigError::SourceAlreadyRegistered(name.to_string()));
@@ -342,7 +342,7 @@ pub fn register_remote_source(
 }
 
 /// Remove a remote source from the config by name. Does NOT delete the state directory.
-pub fn remove_remote_source(name: &str, config: &mut BiemConfig) -> Result<(), ConfigError> {
+pub fn remove_remote_source(name: &str, config: &mut LocusConfig) -> Result<(), ConfigError> {
     if config.remote_sources.remove(name).is_none() {
         return Err(ConfigError::SourceNotFound(name.to_string()));
     }
@@ -353,7 +353,7 @@ pub fn remove_remote_source(name: &str, config: &mut BiemConfig) -> Result<(), C
 pub fn update_remote_last_poll(
     name: &str,
     ts: i64,
-    config: &mut BiemConfig,
+    config: &mut LocusConfig,
 ) -> Result<(), ConfigError> {
     config
         .remote_sources
@@ -373,20 +373,20 @@ pub fn register_vault(
     vault_path: &Path,
     storage: StorageMode,
     locus_dir: &Path,
-    config: &mut BiemConfig,
+    config: &mut LocusConfig,
 ) -> Result<(String, SourceEntry), ConfigError> {
     register_source(vault_path, SourceType::Obsidian, storage, locus_dir, config)
 }
 
 /// Legacy alias — delegates to `resolve_source`.
 #[deprecated(note = "Use resolve_source instead")]
-pub fn resolve_vault(vault_path: &Path, config: &BiemConfig) -> Result<SourceEntry, ConfigError> {
+pub fn resolve_vault(vault_path: &Path, config: &LocusConfig) -> Result<SourceEntry, ConfigError> {
     resolve_source(vault_path, config)
 }
 
 /// Legacy alias — delegates to `remove_source`.
 #[deprecated(note = "Use remove_source instead")]
-pub fn remove_vault(vault_path: &Path, config: &mut BiemConfig) -> Result<String, ConfigError> {
+pub fn remove_vault(vault_path: &Path, config: &mut LocusConfig) -> Result<String, ConfigError> {
     remove_source(vault_path, config)
 }
 
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn test_save_and_load_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
         config.sources.insert(
             "test".into(),
             SourceEntry {
@@ -446,7 +446,7 @@ mod tests {
     fn test_register_source_global() {
         let locus_dir = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
 
         let (name, entry) =
             register_source(source.path(), SourceType::Obsidian, StorageMode::Global, locus_dir.path(), &mut config)
@@ -462,7 +462,7 @@ mod tests {
     fn test_register_source_local() {
         let locus_dir = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
 
         let (_name, entry) =
             register_source(source.path(), SourceType::Obsidian, StorageMode::Local, locus_dir.path(), &mut config)
@@ -478,7 +478,7 @@ mod tests {
     fn test_register_duplicate_errors() {
         let locus_dir = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
 
         register_source(source.path(), SourceType::Obsidian, StorageMode::Global, locus_dir.path(), &mut config).unwrap();
         let err =
@@ -491,7 +491,7 @@ mod tests {
     fn test_resolve_source() {
         let locus_dir = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
 
         let (_name, expected) =
             register_source(source.path(), SourceType::Obsidian, StorageMode::Global, locus_dir.path(), &mut config)
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn test_resolve_unknown_source_errors() {
         let source = tempfile::tempdir().unwrap();
-        let config = BiemConfig::default();
+        let config = LocusConfig::default();
         let err = resolve_source(source.path(), &config).unwrap_err();
         assert!(matches!(err, ConfigError::SourceNotFound(_)));
     }
@@ -512,7 +512,7 @@ mod tests {
     fn test_remove_source() {
         let locus_dir = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
 
         register_source(source.path(), SourceType::Obsidian, StorageMode::Global, locus_dir.path(), &mut config).unwrap();
         assert_eq!(config.sources.len(), 1);
@@ -524,7 +524,7 @@ mod tests {
     fn test_full_round_trip() {
         let locus_dir = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
 
         register_source(source.path(), SourceType::Obsidian, StorageMode::Global, locus_dir.path(), &mut config).unwrap();
         save_config_to(&config, locus_dir.path()).unwrap();
@@ -539,7 +539,7 @@ mod tests {
         let locus_dir = tempfile::tempdir().unwrap();
         let s1 = tempfile::Builder::new().prefix("my-source").tempdir().unwrap();
         let s2 = tempfile::Builder::new().prefix("my-source").tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
 
         let (n1, _) = register_source(s1.path(), SourceType::Obsidian, StorageMode::Global, locus_dir.path(), &mut config).unwrap();
         let (n2, _) = register_source(s2.path(), SourceType::Obsidian, StorageMode::Global, locus_dir.path(), &mut config).unwrap();
@@ -552,7 +552,7 @@ mod tests {
     fn test_register_code_source() {
         let locus_dir = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
-        let mut config = BiemConfig::default();
+        let mut config = LocusConfig::default();
 
         let (_name, entry) =
             register_source(source.path(), SourceType::Code, StorageMode::Global, locus_dir.path(), &mut config)

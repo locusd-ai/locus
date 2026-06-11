@@ -1,4 +1,4 @@
-//! Embedding and vector search implementations for BIEM.
+//! Embedding and vector search implementations for Locus.
 //!
 //! Provides `VectorStore` implementations:
 //! - `InMemoryVectorStore` — brute-force cosine similarity (for tests)

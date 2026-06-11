@@ -16,7 +16,7 @@ use tracing::instrument;
 /// DuckDB-backed [`Registry`].
 ///
 /// Wraps `Connection` in a `Mutex` to satisfy `Send + Sync` required by the trait.
-/// This is fine because BIEM's core is single-threaded sync; concurrency is handled
+/// This is fine because Locus's core is single-threaded sync; concurrency is handled
 /// at the boundary via `spawn_blocking`.
 pub struct DuckDbRegistry {
     conn: Arc<Mutex<Connection>>,

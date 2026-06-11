@@ -104,10 +104,10 @@ gantt
 - [x] Output formatting: table, JSON (`--json` flag)
 
 #### 8. Interface: MCP Server
-- [x] MCP tool: `biem_search` (filters → MatchPointers)
-- [x] MCP tool: `biem_inspect` (file → metadata)
-- [x] MCP tool: `biem_status` (index health)
-- [x] MCP tool: `biem_bitmaps` (available filters for discovery)
+- [x] MCP tool: `locus_search` (filters → MatchPointers)
+- [x] MCP tool: `locus_inspect` (file → metadata)
+- [x] MCP tool: `locus_status` (index health)
+- [x] MCP tool: `locus_filters` (available filters for discovery)
 - [ ] MCP resource: expose vault metadata as resource
 - [x] Integration test: MCP client → query → verify response
 
@@ -204,13 +204,13 @@ Track the lineage of LLM-generated assets and session context via bitmap keys.
 - Pure bitmap — no new schema, just two new `BitmapCategory` variants (`Provenance`, `Session`) added at implementation time
 - Write path: MCP tool / API endpoint accepts `provenance_doc_ids` and `session_id` alongside file creation
 - Read path: query engine resolves provenance/session keys like any other bitmap filter
-- Session read-tracking: MCP `biem_inspect` / `biem_search` tools optionally tag accessed docs with active session
+- Session read-tracking: MCP `locus_inspect` / `locus_search` tools optionally tag accessed docs with active session
 
 ---
 
 ## Phase 3 — Code Intelligence ✅
 
-Extend BIEM to index codebases using Tree-sitter. **Implemented in WS3.**
+Extend Locus to index codebases using Tree-sitter. **Implemented in WS3.**
 
 ### Completed
 - [x] `locus-code` crate with `CodeParser` (Tree-sitter, `Parser` trait)
@@ -220,7 +220,7 @@ Extend BIEM to index codebases using Tree-sitter. **Implemented in WS3.**
 - [x] Python grammar (tree-sitter-python): def, class, import/from, decorators, ALL_CAPS constants
 - [x] Code-specific bitmap keys: `lang:*`, `kind:*`, `visibility:*`, `async:true`, `import:*`
 - [x] Python decorator convention tags: `convention:fixture`, `convention:route`, etc.
-- [x] `.biemignore` support (gitignore syntax, default: `target/`, `node_modules/`, `.git/`, etc.)
+- [x] `.locusignore` support (gitignore syntax, default: `target/`, `node_modules/`, `.git/`, etc.)
 - [x] `locus init <path> --type code` for code source registration
 - [x] Multi-source support (Obsidian + code coexist)
 - [x] Source type inference from parse result tags

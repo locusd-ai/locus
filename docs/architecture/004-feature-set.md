@@ -1,17 +1,17 @@
 # Locus Feature Set
 
-> Status: **Living document** — defines what BIEM does today and where it's heading.
+> Status: **Living document** — defines what Locus does today and where it's heading.
 > Reference: `001-system-overview.md` for architecture, `002-roadmap.md` for phased delivery
 
 ## Vision
 
 Locus is a **universal pointer system for LLMs**. It answers "where is the thing I need?" in constant time, across any source — code, docs, wikis, infra configs, tickets — without ever returning content. The LLM gets precise structural pointers (file, byte range, chunk kind, metadata) and decides what to read.
 
-Think of BIEM as the **index at the back of the book** — it doesn't contain the chapters, it tells you exactly which page to turn to. Except the book is your entire digital workspace, and the reader is an LLM that needs to minimise context pollution.
+Think of Locus as the **index at the back of the book** — it doesn't contain the chapters, it tells you exactly which page to turn to. Except the book is your entire digital workspace, and the reader is an LLM that needs to minimise context pollution.
 
 ---
 
-## What BIEM Is (and Isn't)
+## What Locus Is (and Isn't)
 
 | Locus is | Locus is not |
 |---------|-------------|
@@ -22,11 +22,11 @@ Think of BIEM as the **index at the back of the book** — it doesn't contain th
 | Local-first, single-user | A collaboration platform |
 | Persistent, incremental, cached | A batch-only tool |
 
-### How BIEM relates to knowledge graph tools
+### How Locus relates to knowledge graph tools
 
 Knowledge graph tools build a **graph** — nodes are concepts, edges are relationships, communities are detected via clustering. They're optimised for *understanding structure* ("what connects auth to the database?", "explain RateLimiter").
 
-BIEM builds a **bitmap index** — keys are structural attributes, values are compressed bitsets of document IDs. It's optimised for *filtering at speed* ("all Rust files tagged `async` in `src/network/` that are functions" → 19µs, returns pointers).
+Locus builds a **bitmap index** — keys are structural attributes, values are compressed bitsets of document IDs. It's optimised for *filtering at speed* ("all Rust files tagged `async` in `src/network/` that are functions" → 19µs, returns pointers).
 
 They're complementary layers:
 
@@ -35,7 +35,7 @@ They're complementary layers:
 │  LLM / AI Assistant                         │
 ├─────────────────────────────────────────────┤
 │  Graph:    "explain how auth works"         │  ← understanding
-│  BIEM:     "find all auth-related files"    │  ← filtering
+│  Locus:    "find all auth-related files"    │  ← filtering
 │  Vector:   "find similar to this function"  │  ← similarity
 ├─────────────────────────────────────────────┤
 │  Source: code, docs, wiki, infra, tickets   │
@@ -68,24 +68,25 @@ Index any repository. AST-aware chunking via Tree-sitter.
 
 | Feature | Status |
 |---------|--------|
-| Tree-sitter parsing (Rust, Python, TypeScript, Go, Java, ...) | Planned |
-| AST-aware chunks: function, class, module, impl block | Planned |
-| Semantic bits: `is_function`, `is_class`, `is_exported`, `has_side_effects`, `is_test` | Planned |
-| Language bitmap (`lang:rust`, `lang:python`) | Planned |
-| Import/dependency extraction → link bitmaps | Planned |
+| Tree-sitter parsing (Rust, TypeScript, Python) | ✅ |
+| Tree-sitter parsing (Go, Java, …) | Planned |
+| AST-aware chunks: function, method, class, module, impl block | ✅ |
+| `lang:*`, `kind:*`, `visibility:*`, `async:true` bitmap keys | ✅ |
+| Import/dependency extraction → `import:*` link bitmaps | ✅ |
 | Multi-repo support: global ID namespace, repo-scoped bitmaps | Planned |
 | Cross-repo queries (`repo:backend AND tag:auth AND kind:function`) | Planned |
-| `.biemignore` (gitignore syntax) | Planned |
+| `.locusignore` (gitignore syntax) | ✅ |
 
-**Why Tree-sitter?** Local AST extraction, no LLM calls, 29+ language support. BIEM doesn't build a call graph; it builds **attribute bitmaps** from the AST. The query "all exported async functions in `src/` that import `tokio`" becomes a bitmap AND — not a graph traversal.
+**Why Tree-sitter?** Local AST extraction, no LLM calls, 29+ language support. Locus doesn't build a call graph; it builds **attribute bitmaps** from the AST. The query "all exported async functions in `src/` that import `tokio`" becomes a bitmap AND — not a graph traversal.
 
 ### Phase 4 — Extended Sources
 
 | Source | Parser | Bits indexed | Status |
 |--------|--------|-------------|--------|
-| **Confluence** | REST API → HTML → chunks | space, label, author, page type | Planned |
-| **Jira / Linear** | REST API → structured fields | project, status, assignee, label, sprint | Planned |
-| **Slack / Discord** | Archive export or API | channel, author, thread, reaction | Planned |
+| **Confluence** | REST API → HTML → chunks | space, label, author, page type | ✅ |
+| **Jira** | REST API → structured fields | project, status, assignee, label, sprint | ✅ |
+| **Slack** | Bot API polling | channel, author, thread, reaction | ✅ |
+| **Webhook ingest** | Push endpoint (POST /v1/webhook/ingest) | any source that can POST JSON | ✅ |
 | **Filesystem (generic)** | Extension-based routing | folder, extension, size class, modified date | Planned |
 | **Git history** | `git log` parsing | author, date range, changed-file bitmaps | Planned |
 | **Terraform / Pulumi** | HCL / YAML parser | resource type, provider, module, environment | Future |
@@ -94,7 +95,7 @@ Index any repository. AST-aware chunking via Tree-sitter.
 
 ### Future — Infrastructure Traversal
 
-The long-term vision: an LLM can ask "which code deploys to the `payments` namespace?" and BIEM resolves it:
+The long-term vision: an LLM can ask "which code deploys to the `payments` namespace?" and Locus resolves it:
 
 ```
 repo:backend AND folder:src/payments    → code pointers
@@ -139,7 +140,7 @@ This isn't graph traversal — it's **bitmap intersection across source boundari
 
 ## Jaccard Similarity
 
-BIEM supports **Jaccard similarity** (`|A ∩ B| / |A ∪ B|`) as a native bitmap operation. Since Roaring Bitmaps already provide `intersection_len()` and `union_len()` in constant time, Jaccard costs ~nanoseconds on top of existing queries.
+Locus supports **Jaccard similarity** (`|A ∩ B| / |A ∪ B|`) as a native bitmap operation. Since Roaring Bitmaps already provide `intersection_len()` and `union_len()` in constant time, Jaccard costs ~nanoseconds on top of existing queries.
 
 ### Two modes
 
@@ -202,7 +203,7 @@ Group similar keys together in `locus bitmaps` output so LLMs can discover filte
 | Interface | Features |
 |-----------|----------|
 | **CLI (`locus`)** | `init`, `config`, `status`, `search`, `inspect`, `bitmaps`, `compact` |
-| **MCP Server** | `biem_search`, `biem_inspect`, `biem_status`, `biem_bitmaps` tools |
+| **MCP Server** | `locus_search`, `locus_inspect`, `locus_status`, `locus_filters` tools |
 | **HTTP API** | `POST /search`, `GET /status`, `GET /inspect/:path`, `GET /bitmaps` |
 | **Daemon (`locusd`)** | File watcher + MCP + HTTP in one process |
 
@@ -220,9 +221,9 @@ Group similar keys together in `locus bitmaps` output so LLMs can discover filte
 
 ---
 
-## What BIEM Returns
+## What Locus Returns
 
-BIEM never returns content. Every query response is a list of **MatchPointers**:
+Locus never returns content. Every query response is a list of **MatchPointers**:
 
 ```rust
 MatchPointer {
@@ -265,7 +266,7 @@ See [`docs/benchmarks/REPORT.md`](../benchmarks/REPORT.md) for full comparison a
 
 ## Comparison with Knowledge Graph Tools
 
-| Dimension | Knowledge Graph | BIEM |
+| Dimension | Knowledge Graph | Locus |
 |-----------|----------------|------|
 | **Core data structure** | Node/edge graph | Roaring Bitmap inverted index |
 | **Query model** | Graph traversal, path finding, explain | Bitmap AND/OR/NOT, cardinality sort |
@@ -281,28 +282,28 @@ See [`docs/benchmarks/REPORT.md`](../benchmarks/REPORT.md) for full comparison a
 ### When to use each
 
 - **"What connects auth to the database?"** → Knowledge graph (relationship traversal)
-- **"Find all auth functions in src/network/ that are exported"** → BIEM (bitmap filter)
+- **"Find all auth functions in src/network/ that are exported"** → Locus (bitmap filter)
 - **"Explain how RateLimiter works"** → Knowledge graph (subgraph + community context)
-- **"Which files changed tag:critical this week?"** → BIEM (bitmap diff + date filter)
+- **"Which files changed tag:critical this week?"** → Locus (bitmap diff + date filter)
 - **"Show me the architecture of this repo"** → Knowledge graph (hub nodes, call flow)
-- **"Give me the 12 files an LLM needs to answer this question"** → BIEM (multi-filter, pointers only)
+- **"Give me the 12 files an LLM needs to answer this question"** → Locus (multi-filter, pointers only)
 
 ### Could they work together?
 
-Yes. A knowledge graph builds understanding; BIEM pre-filters the candidate set:
+Yes. A knowledge graph builds understanding; Locus pre-filters the candidate set:
 
 1. LLM asks: "How does authentication work in the payments service?"
-2. **BIEM** (19µs): `tag:auth AND source:repo:payments AND kind:function` → 8 file pointers
+2. **Locus** (19µs): `tag:auth AND source:repo:payments AND kind:function` → 8 file pointers
 3. **Knowledge graph**: build subgraph from those 8 files → relationships, call flow
 4. LLM reads only the relevant chunks from those 8 files
 
-Without BIEM, the graph tool queries the full graph (285+ nodes). With BIEM as pre-filter, it queries a subgraph of 8 nodes. That's the composability story.
+Without Locus, the graph tool queries the full graph (285+ nodes). With Locus as pre-filter, it queries a subgraph of 8 nodes. That's the composability story.
 
 ---
 
 ## Enrichment: Semantic & Custom Taggers
 
-BIEM's structural parsing (frontmatter, AST, schema) is fast and deterministic but limited — it can't infer that a file is "about authentication" unless someone tagged it `#auth`. Semantic taggers close this gap by running an enrichment pass after parsing, producing **inferred bitmap keys** that get indexed alongside structural ones.
+Locus's structural parsing (frontmatter, AST, schema) is fast and deterministic but limited — it can't infer that a file is "about authentication" unless someone tagged it `#auth`. Semantic taggers close this gap by running an enrichment pass after parsing, producing **inferred bitmap keys** that get indexed alongside structural ones.
 
 ### Architecture
 
@@ -420,7 +421,7 @@ The key insight: **you don't need graph traversal if you have rich enough bitmap
 |-------|----------|----------|
 | **Project-local** | `.locus/taggers/` | Team ownership, domain mapping, project-specific conventions |
 | **Global** | `~/.locus/taggers/` | Cross-project standards (language patterns, quality signals) |
-| **Built-in** | Compiled into BIEM | Topic, complexity, pattern detection — always available |
+| **Built-in** | Compiled into Locus | Topic, complexity, pattern detection — always available |
 
 Global taggers apply to all registered sources. A company could distribute a shared `~/.locus/taggers/company-standards.yaml` that tags everything with `org:*`, `compliance:*`, `data-classification:*` keys.
 
@@ -428,7 +429,7 @@ Global taggers apply to all registered sources. A company could distribute a sha
 
 ## Design Principles
 
-1. **Pointers, not content** — BIEM never stores or returns file content. It's an index, not a cache.
+1. **Pointers, not content** — Locus never stores or returns file content. It's an index, not a cache.
 2. **Constant-time queries** — Bitmap operations don't degrade with corpus size. 100K files = same speed as 1K.
 3. **Source-agnostic** — Any parseable content gets the same bitmap treatment. A Terraform module and an Obsidian note are both documents with tags, types, and chunks.
 4. **No LLM dependency** — Indexing is pure structural parsing (frontmatter, AST, schema). No API calls, no embeddings, no inference. Deterministic and reproducible.

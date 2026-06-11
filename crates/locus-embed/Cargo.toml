@@ -1,6 +1,6 @@
 [package]
 name = "locus-embed"
-description = "Embedding and vector search for BIEM"
+description = "Embedding and vector search for Locus"
 version.workspace = true
 edition.workspace = true
 
