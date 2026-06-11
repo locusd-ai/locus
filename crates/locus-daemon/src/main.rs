@@ -65,6 +65,12 @@ struct Cli {
     /// Enable webhook endpoint for push-based remote ingestion
     #[arg(long)]
     webhook: bool,
+
+    /// Enable semantic (vector similarity) search via local ONNX embeddings.
+    /// Wires the embedder and vector store into the MCP locus_semantic tool
+    /// and HTTP POST /v1/semantic endpoint. The model is loaded on first use.
+    #[arg(long)]
+    semantic: bool,
 }
 
 #[tokio::main]
@@ -139,14 +145,25 @@ async fn main() -> Result<()> {
         let qe_bitmap: Box<dyn locus_core::bitmap::BitmapStore> = Box::new(
             LmdbBitmapStore::new(&lmdb_path).context("failed to open LMDB for query engine")?
         );
-        let engine: Arc<dyn locus_core::query::QueryEngine> = Arc::new(
-            BitmapQueryEngine::new(qe_bitmap, qe_registry),
-        );
+
+        // Build as Arc<BitmapQueryEngine> so we can pass it to both the trait
+        // object (Arc<dyn QueryEngine>) and the semantic path (inherent method).
+        let bitmap_engine: Arc<BitmapQueryEngine> = Arc::new(BitmapQueryEngine::new(qe_bitmap, qe_registry));
+        let engine: Arc<dyn locus_core::query::QueryEngine> = Arc::clone(&bitmap_engine) as Arc<dyn locus_core::query::QueryEngine>;
 
         // Launch HTTP server (background task if also running MCP)
         if cli.http {
             let addr = format!("0.0.0.0:{}", cli.port);
-            let mut app = http::router(engine.clone());
+            let mut app = if cli.semantic {
+                let sem_state = http::SemanticHttpState::new(
+                    bitmap_engine.clone(),
+                    data_dir_resolved.clone(),
+                );
+                info!("semantic endpoint enabled at POST /v1/semantic");
+                http::router_with_semantic(engine.clone(), sem_state)
+            } else {
+                http::router(engine.clone())
+            };
 
             // Merge webhook router if --webhook is set; uses a fresh pipeline instance
             if cli.webhook {
@@ -188,6 +205,12 @@ async fn main() -> Result<()> {
 
         if cli.mcp {
             let mut server = mcp::BiemMcpServer::new(engine);
+
+            // Wire semantic engine when --semantic is enabled
+            if cli.semantic {
+                server = server.with_semantic(bitmap_engine.clone(), data_dir_resolved.clone());
+                info!("MCP locus_semantic tool enabled");
+            }
 
             // Wire ingestion pipeline into MCP when webhook is enabled
             if cli.webhook {

@@ -1,10 +1,11 @@
 //! MCP (Model Context Protocol) server for BIEM.
 //!
-//! Exposes 6 tools: locus_search, locus_inspect, locus_status, locus_filters,
-//! locus_graph, locus_remote_ingest.
+//! Exposes 7 tools: locus_search, locus_inspect, locus_status, locus_filters,
+//! locus_graph, locus_remote_ingest, locus_semantic.
 //! Runs over stdio transport for integration with LLM clients.
 
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rmcp::{
     ServerHandler,
@@ -18,16 +19,31 @@ use locus_core::graph::{
     CentralityAlgorithm, Direction, EdgeFilter, ExpandSpec, GraphOp, GraphQueryEngine,
     GraphQueryRequest,
 };
-use locus_core::query::{Filter, QueryEngine, QueryRequest};
+use locus_core::query::{QueryEngine, QueryRequest};
+use locus_core::semantic::{Embedder, SemanticQueryRequest};
+use locus_embed::{FastEmbedEmbedder, UsearchVectorStore};
 use locus_ingest::IngestionPipeline;
+use locus_query::{parse_filter, BitmapQueryEngine, Filter};
 
 // ── Tool parameter types ─────────────────────────────────────────
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchParams {
-    /// Bitmap filter keys to AND together (e.g. ["tag:work", "type:task"])
+    /// Filter expression string using the Locus query DSL.
+    /// Terms are `namespace:value` pairs (e.g. `tag:work`, `folder:crates/locus-query`).
+    /// Namespaces: tag, folder, type, source, lang, kind, topic.
+    /// Operators: AND, OR, NOT (case-insensitive). Parentheses for grouping.
+    /// Precedence: NOT > AND > OR.
+    /// Example: `"tag:work AND (type:task OR type:note) AND NOT folder:archive"`
+    /// Use `locus_filters` to discover available keys.
+    /// If omitted, falls back to `filters` array; if both absent, all indexed docs are matched.
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Legacy: bitmap filter keys to combine (e.g. ["tag:work", "type:task"]).
+    /// Ignored when `filter` is provided.
+    #[serde(default)]
     pub filters: Vec<String>,
-    /// Boolean operation: "and" (default) or "or"
+    /// Boolean operation for legacy `filters`: "and" (default) or "or"
     #[serde(default = "default_op")]
     pub op: String,
     /// Maximum results to return
@@ -41,6 +57,28 @@ fn default_op() -> String {
 
 fn default_limit() -> u32 {
     20
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SemanticParams {
+    /// Natural language query text for vector similarity search.
+    pub query: String,
+    /// Optional filter expression to pre-filter the bitmap index before vector search.
+    /// Same syntax as `locus_search` `filter` param.
+    /// Example: `"source:code AND lang:rust AND NOT kind:test"`
+    /// If omitted, all indexed documents are candidates.
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Maximum number of results to return (default 10).
+    #[serde(default = "default_top_k")]
+    pub top_k: usize,
+    /// Apply cross-encoder reranker for higher quality (default false, slower).
+    #[serde(default)]
+    pub rerank: bool,
+}
+
+fn default_top_k() -> usize {
+    10
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -90,24 +128,42 @@ pub struct RemoteIngestParams {
     pub content_b64: String,
 }
 
+// ── Lazy semantic state ─────────────────────────────────────────
+
+/// Initialised once on first `locus_semantic` call; cached for daemon lifetime.
+struct SemanticState {
+    embedder: FastEmbedEmbedder,
+    vector_store: UsearchVectorStore,
+}
+
 // ── MCP Server ───────────────────────────────────────────────────
 
 /// The BIEM MCP server handler.
-///
-/// Delegates all read/query operations to a `dyn QueryEngine`.
-/// Optionally wired with a `GraphQueryEngine` for graph traversal tools.
-/// Optionally wired with an `IngestionPipeline` for remote ingestion.
 pub struct BiemMcpServer {
     engine: Arc<dyn QueryEngine>,
     graph: Option<Arc<dyn GraphQueryEngine>>,
     ingest: Option<Arc<Mutex<IngestionPipeline>>>,
+    /// Concrete engine for semantic queries (inherent method, not on QueryEngine trait).
+    semantic_engine: Option<Arc<BitmapQueryEngine>>,
+    /// Data directory: vectors.usearch lives at `<data_dir>/vectors.usearch`.
+    semantic_data_dir: Option<PathBuf>,
+    /// Lazy-init semantic state (embedder + vector store). OnceLock because model load is slow.
+    semantic_state: OnceLock<Result<SemanticState, String>>,
     tool_router: ToolRouter<Self>,
 }
 
 impl BiemMcpServer {
     pub fn new(engine: Arc<dyn QueryEngine>) -> Self {
         let tool_router = Self::tool_router();
-        Self { engine, graph: None, ingest: None, tool_router }
+        Self {
+            engine,
+            graph: None,
+            ingest: None,
+            semantic_engine: None,
+            semantic_data_dir: None,
+            semantic_state: OnceLock::new(),
+            tool_router,
+        }
     }
 
     pub fn with_graph(mut self, g: Arc<dyn GraphQueryEngine>) -> Self {
@@ -118,6 +174,38 @@ impl BiemMcpServer {
     pub fn with_ingest(mut self, p: Arc<Mutex<IngestionPipeline>>) -> Self {
         self.ingest = Some(p);
         self
+    }
+
+    /// Wire a concrete `BitmapQueryEngine` for semantic queries and provide the data directory
+    /// so the vector store path can be resolved (`<data_dir>/vectors.usearch`).
+    pub fn with_semantic(mut self, engine: Arc<BitmapQueryEngine>, data_dir: PathBuf) -> Self {
+        self.semantic_engine = Some(engine);
+        self.semantic_data_dir = Some(data_dir);
+        self
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────
+
+    /// Build a match-all filter by enumerating source: keys via the query engine.
+    fn build_match_all_filter(&self) -> Filter {
+        match self.engine.list_filter_keys(Some("source")) {
+            Ok(entries) if !entries.is_empty() => {
+                Filter::Or(entries.into_iter().map(|e| Filter::Key(e.key)).collect())
+            }
+            _ => Filter::Or(vec![]),
+        }
+    }
+
+    /// Parse an expression string into a Filter.
+    /// Returns an Err string (JSON) on failure.
+    fn parse_filter_or_err(expr: &str) -> Result<Filter, String> {
+        parse_filter(expr).map_err(|e| {
+            serde_json::json!({
+                "error": "filter parse error",
+                "message": e.to_string()
+            })
+            .to_string()
+        })
     }
 }
 
@@ -140,20 +228,40 @@ impl ServerHandler for BiemMcpServer {
 impl BiemMcpServer {
     /// Search the Locus index using bitmap filters. Returns structural pointers
     /// to matching documents and their chunks (not content).
-    /// Use locus_filters first to discover available filter keys.
-    #[tool(name = "locus_search", description = "Search the Locus index using bitmap filters")]
+    ///
+    /// `filter` (preferred): expression syntax — `namespace:value` terms with AND/OR/NOT
+    /// and parentheses. Example: `"tag:work AND (type:task OR type:note) AND NOT folder:archive"`.
+    /// Namespaces: tag, folder, type, source, lang, kind, topic. Precedence: NOT > AND > OR.
+    ///
+    /// `filters` (legacy): flat key list combined with `op` (and/or). Ignored when `filter` set.
+    ///
+    /// If neither is provided, matches all indexed documents.
+    /// Use `locus_filters` to discover available keys.
+    #[tool(name = "locus_search", description = "Search the Locus index. Use filter=\"tag:work AND (type:task OR type:note)\" for expression syntax, or the legacy filters array. Supports NOT and parentheses.")]
     fn search(&self, params: Parameters<SearchParams>) -> String {
         let params = params.0;
-        let filter = if params.filters.is_empty() {
-            Filter::Key("source:obsidian".into())
-        } else if params.filters.len() == 1 {
-            Filter::Key(params.filters[0].clone())
-        } else {
-            let keys: Vec<Filter> = params.filters.iter().map(|k| Filter::Key(k.clone())).collect();
-            match params.op.as_str() {
-                "or" => Filter::Or(keys),
-                _ => Filter::And(keys),
+
+        let filter = if let Some(ref expr) = params.filter {
+            match Self::parse_filter_or_err(expr) {
+                Ok(f) => f,
+                Err(json_err) => return json_err,
             }
+        } else if !params.filters.is_empty() {
+            if params.filters.len() == 1 {
+                Filter::Key(params.filters[0].clone())
+            } else {
+                let keys: Vec<Filter> = params
+                    .filters
+                    .iter()
+                    .map(|k| Filter::Key(k.clone()))
+                    .collect();
+                match params.op.as_str() {
+                    "or" => Filter::Or(keys),
+                    _ => Filter::And(keys),
+                }
+            }
+        } else {
+            self.build_match_all_filter()
         };
 
         let result = self.engine.query(QueryRequest {
@@ -164,6 +272,82 @@ impl BiemMcpServer {
 
         match result {
             Ok(qr) => serde_json::to_string(&qr).unwrap_or_else(|e| format!(r#"{{"error":"{}"}}"#, e)),
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e),
+        }
+    }
+
+    /// Semantic (vector similarity) search over the Locus index.
+    ///
+    /// Embeds the query with a local ONNX model (BGE-small-en-v1.5, no API key needed) and
+    /// searches within the bitmap-pre-filtered candidate set. The model is loaded on first call
+    /// and cached; subsequent calls are fast.
+    ///
+    /// `query`: required natural-language search text.
+    /// `filter`: optional expression (same syntax as locus_search). Defaults to all indexed docs.
+    /// `top_k`: max results (default 10).
+    /// `rerank`: apply cross-encoder reranker (default false; slower but higher quality).
+    ///
+    /// Requires locusd started with `--semantic` to wire the embedding engine.
+    #[tool(name = "locus_semantic", description = "Semantic vector search — finds documents by meaning using local ONNX embeddings. Use filter= to scope (e.g. \"source:code AND lang:rust\"). Requires locusd --semantic.")]
+    fn semantic(&self, params: Parameters<SemanticParams>) -> String {
+        let params = params.0;
+
+        let Some(sem_engine) = &self.semantic_engine else {
+            return r#"{"error":"semantic engine not wired — start locusd with --semantic flag"}"#
+                .into();
+        };
+
+        let filter = if let Some(ref expr) = params.filter {
+            match Self::parse_filter_or_err(expr) {
+                Ok(f) => f,
+                Err(json_err) => return json_err,
+            }
+        } else {
+            self.build_match_all_filter()
+        };
+
+        let Some(data_dir) = &self.semantic_data_dir else {
+            return r#"{"error":"semantic data_dir not configured — internal error"}"#.into();
+        };
+
+        // Lazy-init: expensive model load happens only once
+        let state = self.semantic_state.get_or_init(|| {
+            let embedder = FastEmbedEmbedder::new()
+                .map_err(|e| format!("failed to load embedding model: {e}"))?;
+            let vector_path = data_dir.join("vectors.usearch");
+            let dim = embedder.dimension();
+            let vector_store = UsearchVectorStore::new(&vector_path, dim)
+                .map_err(|e| format!("failed to open vector store: {e}"))?;
+            Ok(SemanticState { embedder, vector_store })
+        });
+
+        let state = match state {
+            Ok(s) => s,
+            Err(msg) => {
+                return serde_json::json!({
+                    "error": "semantic init failed",
+                    "message": msg
+                })
+                .to_string();
+            }
+        };
+
+        let request = SemanticQueryRequest {
+            filter,
+            query_text: params.query,
+            top_k: params.top_k,
+            rerank: params.rerank,
+            graph_expand: None,
+        };
+
+        match sem_engine.semantic_query(
+            &request,
+            &state.embedder,
+            &state.vector_store,
+            None,
+        ) {
+            Ok(r) => serde_json::to_string(&r)
+                .unwrap_or_else(|e| format!(r#"{{"error":"{}"}}"#, e)),
             Err(e) => format!(r#"{{"error":"{}"}}"#, e),
         }
     }
@@ -451,6 +635,7 @@ mod tests {
     fn test_search_returns_valid_json() {
         let server = make_server();
         let result = server.search(Parameters(SearchParams {
+            filter: None,
             filters: vec!["tag:work".into()],
             op: "and".into(),
             limit: 20,
@@ -464,6 +649,7 @@ mod tests {
     fn test_search_and_filter() {
         let server = make_server();
         let result = server.search(Parameters(SearchParams {
+            filter: None,
             filters: vec!["tag:work".into(), "type:task".into()],
             op: "and".into(),
             limit: 20,
@@ -476,6 +662,7 @@ mod tests {
     fn test_search_or_filter() {
         let server = make_server();
         let result = server.search(Parameters(SearchParams {
+            filter: None,
             filters: vec!["tag:work".into(), "type:task".into()],
             op: "or".into(),
             limit: 20,
@@ -485,15 +672,117 @@ mod tests {
     }
 
     #[test]
-    fn test_search_empty_filters_defaults_to_source_obsidian() {
+    fn test_search_expression_and() {
         let server = make_server();
         let result = server.search(Parameters(SearchParams {
+            filter: Some("tag:work AND type:task".into()),
+            filters: vec![],
+            op: "and".into(),
+            limit: 20,
+        }));
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["total_matching"], 1);
+    }
+
+    #[test]
+    fn test_search_expression_or() {
+        let server = make_server();
+        let result = server.search(Parameters(SearchParams {
+            filter: Some("tag:work OR type:task".into()),
             filters: vec![],
             op: "and".into(),
             limit: 20,
         }));
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(json["total_matching"], 2);
+    }
+
+    #[test]
+    fn test_search_expression_not() {
+        let server = make_server();
+        // tag:work (2 docs) AND NOT type:task (removes d1) → 1 doc (d2 = note1.md)
+        let result = server.search(Parameters(SearchParams {
+            filter: Some("tag:work AND NOT type:task".into()),
+            filters: vec![],
+            op: "and".into(),
+            limit: 20,
+        }));
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["total_matching"], 1);
+        let matches = json["matches"].as_array().unwrap();
+        assert!(matches[0]["file_path"].as_str().unwrap().contains("note1"));
+    }
+
+    #[test]
+    fn test_search_expression_invalid_returns_error() {
+        let server = make_server();
+        let result = server.search(Parameters(SearchParams {
+            filter: Some("barekeynocodon".into()),
+            filters: vec![],
+            op: "and".into(),
+            limit: 20,
+        }));
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["error"], "filter parse error");
+        assert!(json["message"].is_string());
+    }
+
+    #[test]
+    fn test_search_empty_defaults_to_match_all() {
+        let server = make_server();
+        let result = server.search(Parameters(SearchParams {
+            filter: None,
+            filters: vec![],
+            op: "and".into(),
+            limit: 20,
+        }));
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        // source:obsidian covers both docs
+        assert_eq!(json["total_matching"], 2);
+    }
+
+    #[test]
+    fn test_semantic_not_wired_returns_error() {
+        let server = make_server(); // no .with_semantic()
+        let result = server.semantic(Parameters(SemanticParams {
+            query: "test query".into(),
+            filter: None,
+            top_k: 10,
+            rerank: false,
+        }));
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(json["error"].is_string());
+        assert!(json["error"].as_str().unwrap().contains("not wired"));
+    }
+
+    #[test]
+    fn test_semantic_invalid_filter_returns_error() {
+        // We can test filter parsing without needing a real semantic engine:
+        // create a server with a minimal semantic_engine wired but no real data dir
+        // — the filter parse error is returned before the engine is consulted.
+        let mut bitmap_store = InMemoryBitmapStore::new();
+        let mut registry = InMemoryRegistry::new();
+        let _ = registry.insert_doc(locus_core::registry::NewDoc {
+            file_path: PathBuf::from("/vault/a.md"),
+            source_type: SourceType::Obsidian,
+            blake3_hash: [1; 32],
+            auto_type: None,
+        }).unwrap();
+        bitmap_store.insert_id("source:obsidian", 1).unwrap();
+
+        let bqe = Arc::new(BitmapQueryEngine::new(Box::new(bitmap_store), Box::new(registry)));
+        let engine: Arc<dyn QueryEngine> = bqe.clone();
+        let server = BiemMcpServer::new(engine)
+            .with_semantic(bqe, PathBuf::from("/nonexistent/data"));
+
+        let result = server.semantic(Parameters(SemanticParams {
+            query: "test".into(),
+            filter: Some("bare_term_no_colon".into()),
+            top_k: 5,
+            rerank: false,
+        }));
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["error"], "filter parse error");
     }
 
     #[test]
@@ -534,7 +823,6 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&result).unwrap();
         let entries = json.as_array().unwrap();
         assert_eq!(entries.len(), 3);
-        // Each entry should have key and cardinality
         for entry in entries {
             assert!(entry["key"].is_string());
             assert!(entry["cardinality"].is_number());
@@ -572,7 +860,6 @@ mod tests {
 
     #[test]
     fn test_graph_tool_any_op_without_engine_returns_error() {
-        // graph not wired → all operations return error regardless of op name
         let server = make_server();
         for op in &["bogus", "neighbours", "stats"] {
             let result = server.graph_query(Parameters(GraphParams {
