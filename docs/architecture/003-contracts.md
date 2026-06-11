@@ -702,6 +702,14 @@ pub struct MatchPointer {
 }
 
 /// A pointer to a specific chunk within a document.
+///
+/// `depth` reflects the heading level (markdown) or scope depth (code) stored
+/// at index time.  It is used by `nest_chunks` to derive the tree structure
+/// and is included in serialized output for consumer use.
+///
+/// `children` is populated by `nest_chunks` (called inside `hydrate` and
+/// `inspect`).  It is omitted from JSON serialization when empty, so the wire
+/// format is backwards-compatible for flat (leaf) nodes.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChunkPointer {
     pub chunk_id: ChunkId,
@@ -709,6 +717,13 @@ pub struct ChunkPointer {
     pub byte_start: u32,
     pub byte_end: u32,
     pub label: Option<String>,
+    /// Nesting depth (heading level for markdown, scope depth for code).
+    /// Frontmatter and Body chunks have depth 0 and are always roots.
+    pub depth: u8,
+    /// Nested child pointers derived from depth + byte order.
+    /// Omitted from JSON when empty (`#[serde(default, skip_serializing_if = "Vec::is_empty")]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ChunkPointer>,
 }
 
 /// The result of a query.

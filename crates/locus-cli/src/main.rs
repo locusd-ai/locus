@@ -595,13 +595,7 @@ fn cmd_search(vault: Option<&PathBuf>, filter_keys: &[String], limit: u32, cli: 
             print!("    filters: {}", m.matched_filters.join(", "));
         }
         println!();
-        for c in &m.chunks {
-            println!(
-                "    chunk {} ({}) bytes {}..{} {}",
-                c.chunk_id, c.kind, c.byte_start, c.byte_end,
-                c.label.as_deref().unwrap_or("")
-            );
-        }
+        print_chunk_tree(&m.chunks, 2);
     }
 
     Ok(())
@@ -625,13 +619,7 @@ fn cmd_inspect(vault: Option<&PathBuf>, path: &PathBuf, cli: &Cli) -> Result<()>
                 println!("  blake3:       {}", r.blake3_hash);
                 println!("  last_indexed: {}", r.last_indexed);
                 println!("  chunks:       {}", r.chunks.len());
-                for c in &r.chunks {
-                    println!(
-                        "    [{}] {} bytes {}..{} {}",
-                        c.chunk_id, c.kind, c.byte_start, c.byte_end,
-                        c.label.as_deref().unwrap_or("")
-                    );
-                }
+                print_chunk_tree(&r.chunks, 2);
                 println!("  bitmaps:      {}", r.bitmap_keys.join(", "));
             }
         }
@@ -1321,6 +1309,26 @@ fn cmd_remote_remove(name: &str) -> Result<()> {
     println!("Remote source '{}' removed from config.", name);
     println!("Note: state directory is NOT deleted. Remove it manually if needed.");
     Ok(())
+}
+
+/// Recursively print a chunk tree with two-space indentation per nesting level.
+///
+/// `base_indent` is the number of leading spaces before depth-0 chunks
+/// (so callers can align the tree with surrounding output).  Each level of
+/// `children` adds two more spaces.
+fn print_chunk_tree(chunks: &[locus_core::query::ChunkPointer], base_indent: usize) {
+    for c in chunks {
+        let indent = " ".repeat(base_indent);
+        println!(
+            "{}chunk {} ({}) bytes {}..{} {}",
+            indent,
+            c.chunk_id, c.kind, c.byte_start, c.byte_end,
+            c.label.as_deref().unwrap_or("")
+        );
+        if !c.children.is_empty() {
+            print_chunk_tree(&c.children, base_indent + 2);
+        }
+    }
 }
 
 fn format_timestamp(ts: i64) -> String {

@@ -53,6 +53,8 @@ graph LR
 
 Key shift from v1: Locus is a **pointer service**. It returns structured metadata (file path, chunk range, tags, type, match reason) — not the content itself.
 
+Query results emit chunk pointers as a **nested tree** (table-of-contents shape) rather than a flat list.  The nesting is derived at hydration time from each chunk's `depth` field (heading level for markdown, scope depth for code) and document byte order via the `nest_chunks` pure function in `locus-core`.  Depth-0 chunks (Frontmatter, Body) are always roots.  The `children` field on `ChunkPointer` is omitted from serialization when empty, preserving wire-format compatibility for leaf nodes.
+
 ---
 
 ## 2. Module Decomposition (Revised)
