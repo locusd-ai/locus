@@ -225,10 +225,26 @@ erDiagram
         u32 chunk_end "inclusive — last chunk id of current run"
     }
 
+    DOC_BITMAP_KEYS {
+        u32 doc_id PK
+        string bitmap_key PK "keys this doc currently contributes to"
+    }
+
     DOCUMENTS ||--o{ CHUNKS : "has"
     DOCUMENTS ||--|| DOC_CHUNK_RANGES : "current run"
+    DOCUMENTS ||--o{ DOC_BITMAP_KEYS : "contributes"
     BITMAP_CATALOG ||--|| LMDB_STORE : "references"
 ```
+
+**Incremental ingest (B2)**: the registry records each doc's bitmap keys
+(`doc_bitmap_keys`), so re-index diffs and compaction touch only the keys a
+doc actually contributes to — no full bitmap-store scans. Deletes are fully
+lazy: events and bulk runs only set the tombstone bit; `compact()` does the
+targeted scrub. A reserved `__all_docs__` universe bitmap (hidden from
+`list_keys`) is maintained on every insert and powers NOT queries directly.
+Unchanged files in `bulk_index` are now true skips — no parse, no enrich, no
+bitmap writes; pending inserts are merged with stored bitmaps before a single
+`bulk_put`, instead of rebuilding every bitmap from scratch.
 
 **Pre-order chunk-id invariant**: chunk ids within a document are contiguous
 and strictly ascending in document (byte) order. `replace_chunks` always

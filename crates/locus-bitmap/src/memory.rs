@@ -92,7 +92,7 @@ impl BitmapStore for InMemoryBitmapStore {
         let keys = self
             .bitmaps
             .keys()
-            .filter(|k| *k != TOMBSTONE_KEY)
+            .filter(|k| *k != TOMBSTONE_KEY && *k != locus_core::bitmap::ALL_DOCS_KEY)
             .filter(|k| match prefix {
                 Some(p) => k.starts_with(p),
                 None => true,

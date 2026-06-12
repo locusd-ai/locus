@@ -255,3 +255,33 @@ fn get_chunks_for_docs_single_query_ordering() {
     assert!(all.windows(2).all(|w| w[0].chunk_id < w[1].chunk_id));
     assert!(r.get_chunks_for_docs(&[]).unwrap().is_empty());
 }
+
+// ── Doc → bitmap-key bookkeeping (B2) ────────────────────────────
+
+#[test]
+fn doc_keys_roundtrip_and_dedup() {
+    let mut r = open_registry();
+    let id = r.insert_doc(make_doc("a.md")).unwrap();
+    r.set_doc_keys(id, &[
+        "tag:alpha".to_string(),
+        "folder:/x".to_string(),
+        "tag:alpha".to_string(), // duplicate
+    ])
+    .unwrap();
+
+    let keys = r.get_doc_keys(id).unwrap();
+    assert_eq!(keys, vec!["folder:/x".to_string(), "tag:alpha".to_string()]);
+
+    // Replacement semantics
+    r.set_doc_keys(id, &["tag:beta".to_string()]).unwrap();
+    assert_eq!(r.get_doc_keys(id).unwrap(), vec!["tag:beta".to_string()]);
+}
+
+#[test]
+fn doc_keys_cleared_on_delete_doc() {
+    let mut r = open_registry();
+    let id = r.insert_doc(make_doc("a.md")).unwrap();
+    r.set_doc_keys(id, &["tag:alpha".to_string()]).unwrap();
+    r.delete_doc(id).unwrap();
+    assert!(r.get_doc_keys(id).unwrap().is_empty());
+}

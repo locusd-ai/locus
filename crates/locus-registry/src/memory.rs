@@ -19,6 +19,7 @@ pub struct InMemoryRegistry {
     path_index: HashMap<PathBuf, DocId>,
     chunks: HashMap<DocId, Vec<ChunkRecord>>,
     catalog: HashMap<BitmapKey, BitmapCatalogEntry>,
+    doc_keys: HashMap<DocId, Vec<BitmapKey>>,
 }
 
 impl InMemoryRegistry {
@@ -30,6 +31,7 @@ impl InMemoryRegistry {
             path_index: HashMap::new(),
             chunks: HashMap::new(),
             catalog: HashMap::new(),
+            doc_keys: HashMap::new(),
         }
     }
 
@@ -137,6 +139,7 @@ impl Registry for InMemoryRegistry {
             .ok_or(RegistryError::NotFound(doc_id))?;
         self.path_index.remove(&record.file_path);
         self.chunks.remove(&doc_id);
+        self.doc_keys.remove(&doc_id);
         Ok(())
     }
 
@@ -197,6 +200,26 @@ impl Registry for InMemoryRegistry {
             }
         }
         Ok(None)
+    }
+
+    fn set_doc_keys(&mut self, doc_id: DocId, keys: &[BitmapKey]) -> Result<(), RegistryError> {
+        let mut deduped: Vec<BitmapKey> = Vec::with_capacity(keys.len());
+        for k in keys {
+            if !deduped.contains(k) {
+                deduped.push(k.clone());
+            }
+        }
+        self.doc_keys.insert(doc_id, deduped);
+        Ok(())
+    }
+
+    fn get_doc_keys(&self, doc_id: DocId) -> Result<Vec<BitmapKey>, RegistryError> {
+        Ok(self.doc_keys.get(&doc_id).cloned().unwrap_or_default())
+    }
+
+    fn delete_doc_keys(&mut self, doc_id: DocId) -> Result<(), RegistryError> {
+        self.doc_keys.remove(&doc_id);
+        Ok(())
     }
 
     fn upsert_catalog_entry(&mut self, entry: BitmapCatalogEntry) -> Result<(), RegistryError> {

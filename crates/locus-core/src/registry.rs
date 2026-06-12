@@ -179,6 +179,24 @@ pub trait Registry: Send + Sync {
         Ok(all)
     }
 
+    // --- Doc → bitmap-key bookkeeping ---
+    //
+    // The registry records which bitmap keys each document currently
+    // contributes to. This makes re-index diffs and compaction O(doc's keys)
+    // instead of a scan over every bitmap in the store.
+
+    /// Replace the recorded bitmap keys for a document.
+    /// Keys are deduplicated by the implementation.
+    fn set_doc_keys(&mut self, doc_id: DocId, keys: &[BitmapKey]) -> Result<(), RegistryError>;
+
+    /// The bitmap keys this document currently contributes to.
+    /// Empty for documents indexed before key bookkeeping existed —
+    /// callers must fall back to a bitmap-store scan in that case.
+    fn get_doc_keys(&self, doc_id: DocId) -> Result<Vec<BitmapKey>, RegistryError>;
+
+    /// Remove all recorded keys for a document (used by compaction).
+    fn delete_doc_keys(&mut self, doc_id: DocId) -> Result<(), RegistryError>;
+
     // --- Bitmap catalog ---
 
     /// Upsert a bitmap catalog entry (set cardinality + timestamp).

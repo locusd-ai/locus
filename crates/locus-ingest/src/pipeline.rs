@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use tracing::{info, instrument, warn};
 
-use locus_core::bitmap::{BitmapError, BitmapStore};
+use locus_core::bitmap::{BitmapError, BitmapStore, ALL_DOCS_KEY};
 use locus_core::graph::{Edge, EdgeCategory, GraphStore, UnresolvedEdge};
 use locus_core::parser::{ParseError, Parser};
 use locus_core::registry::{
@@ -120,6 +120,11 @@ impl IngestionPipeline {
     pub fn with_graph_store(mut self, gs: Box<dyn GraphStore>) -> Self {
         self.graph_store = Some(gs);
         self
+    }
+
+    /// Borrow the bitmap store (used by tests and status reporting).
+    pub fn bitmap_store(&self) -> &dyn BitmapStore {
+        self.bitmap_store.as_ref()
     }
 
     /// Decompose the pipeline into its owned parts for handoff (e.g. to a query engine).
@@ -300,6 +305,8 @@ impl IngestionPipeline {
                     self.bitmap_store.insert_id(key, doc_id)?;
                     updated += 1;
                 }
+                self.registry.set_doc_keys(doc_id, &keys)?;
+                self.bitmap_store.insert_id(ALL_DOCS_KEY, doc_id)?;
 
                 let chunk_ids: Vec<u32> = self.registry.get_chunks(doc_id)?
                     .iter().map(|c| c.chunk_id).collect();
@@ -334,16 +341,8 @@ impl IngestionPipeline {
                 let new_keys: HashSet<BitmapKey> =
                     self.enriched_bitmap_keys(&path, &content, &source, &result).into_iter().collect();
 
-                let all_existing_keys = self.bitmap_store.list_keys(None)?;
-                let old_keys: HashSet<BitmapKey> = all_existing_keys
-                    .into_iter()
-                    .filter(|k| {
-                        self.bitmap_store
-                            .get(k)
-                            .map(|bm| bm.contains(doc_record.doc_id))
-                            .unwrap_or(false)
-                    })
-                    .collect();
+                // Old keys from registry bookkeeping (scan fallback for legacy docs)
+                let old_keys = self.old_keys_for(doc_record.doc_id)?;
 
                 let removed: Vec<_> = old_keys.difference(&new_keys).cloned().collect();
                 for key in &removed {
@@ -353,6 +352,9 @@ impl IngestionPipeline {
                 for key in &added {
                     self.bitmap_store.insert_id(key, doc_record.doc_id)?;
                 }
+                let new_keys_vec: Vec<BitmapKey> = new_keys.into_iter().collect();
+                self.registry.set_doc_keys(doc_record.doc_id, &new_keys_vec)?;
+                self.bitmap_store.insert_id(ALL_DOCS_KEY, doc_record.doc_id)?;
 
                 self.registry.update_doc(
                     doc_record.doc_id,
@@ -396,6 +398,26 @@ impl IngestionPipeline {
                 None
             }
         })
+    }
+
+    /// The bitmap keys a doc currently contributes to: registry bookkeeping
+    /// when available, falling back to a full bitmap-store scan for docs
+    /// indexed before key bookkeeping existed.
+    fn old_keys_for(&self, doc_id: DocId) -> Result<HashSet<BitmapKey>, IngestError> {
+        let recorded = self.registry.get_doc_keys(doc_id)?;
+        if !recorded.is_empty() {
+            return Ok(recorded.into_iter().collect());
+        }
+        let all_existing_keys = self.bitmap_store.list_keys(None)?;
+        Ok(all_existing_keys
+            .into_iter()
+            .filter(|k| {
+                self.bitmap_store
+                    .get(k)
+                    .map(|bm| bm.contains(doc_id))
+                    .unwrap_or(false)
+            })
+            .collect())
     }
 
     // ── Bitmap key helpers ───────────────────────────────────────
@@ -641,6 +663,8 @@ impl IngestionPipeline {
             self.bitmap_store.insert_id(key, doc_id)?;
             updated += 1;
         }
+        self.registry.set_doc_keys(doc_id, &keys)?;
+        self.bitmap_store.insert_id(ALL_DOCS_KEY, doc_id)?;
 
         // Embed chunks if embedder configured
         let chunk_ids: Vec<u32> = self.registry.get_chunks(doc_id)?
@@ -698,24 +722,11 @@ impl IngestionPipeline {
         let result = parser.parse(path, &content)?;
         let source = Self::infer_source_type(&result);
 
-        // Compute old bitmap keys from the stored record
-        // We need to reconstruct what the old keys were; we re-parse isn't possible
-        // since we don't store old content. Instead, list keys containing this doc_id
-        // and diff against new keys.
         let new_keys: HashSet<BitmapKey> =
             self.enriched_bitmap_keys(path, &content, &source, &result).into_iter().collect();
 
-        // Find old keys by scanning existing bitmaps that contain this doc_id
-        let all_existing_keys = self.bitmap_store.list_keys(None)?;
-        let old_keys: HashSet<BitmapKey> = all_existing_keys
-            .into_iter()
-            .filter(|k| {
-                self.bitmap_store
-                    .get(k)
-                    .map(|bm| bm.contains(doc_record.doc_id))
-                    .unwrap_or(false)
-            })
-            .collect();
+        // Old keys from registry bookkeeping (scan fallback for legacy docs)
+        let old_keys = self.old_keys_for(doc_record.doc_id)?;
 
         // Remove doc from keys no longer present
         let removed: Vec<_> = old_keys.difference(&new_keys).cloned().collect();
@@ -728,6 +739,9 @@ impl IngestionPipeline {
         for key in &added {
             self.bitmap_store.insert_id(key, doc_record.doc_id)?;
         }
+        let new_keys_vec: Vec<BitmapKey> = new_keys.into_iter().collect();
+        self.registry.set_doc_keys(doc_record.doc_id, &new_keys_vec)?;
+        self.bitmap_store.insert_id(ALL_DOCS_KEY, doc_record.doc_id)?;
 
         // Update registry
         self.registry.update_doc(
@@ -791,16 +805,10 @@ impl IngestionPipeline {
             }
         }
 
-        // Remove from all bitmaps that contain this doc_id
-        let all_keys = self.bitmap_store.list_keys(None)?;
-        let mut removed = 0u32;
-        for key in &all_keys {
-            let bm = self.bitmap_store.get(key)?;
-            if bm.contains(doc_id) {
-                self.bitmap_store.remove_id(key, doc_id)?;
-                removed += 1;
-            }
-        }
+        // Deletes are lazy: query results subtract the tombstone bitmap, so
+        // the id can stay in attribute bitmaps until compact() scrubs them
+        // using the registry's doc->keys bookkeeping.
+        let removed = 0u32;
 
         // Remove graph edges in both directions
         if let Some(gs) = &mut self.graph_store {
@@ -836,6 +844,14 @@ impl IngestionPipeline {
         if old_folder != new_folder {
             self.bitmap_store.remove_id(&old_folder, doc_id)?;
             self.bitmap_store.insert_id(&new_folder, doc_id)?;
+            let mut keys = self.registry.get_doc_keys(doc_id)?;
+            if !keys.is_empty() {
+                keys.retain(|k| k != &old_folder);
+                if !keys.contains(&new_folder) {
+                    keys.push(new_folder.clone());
+                }
+                self.registry.set_doc_keys(doc_id, &keys)?;
+            }
             updated = 2;
         }
 
@@ -882,6 +898,7 @@ impl IngestionPipeline {
         let mut docs_tombstoned = 0u32;
         let mut all_bitmap_entries: std::collections::HashMap<BitmapKey, roaring::RoaringBitmap> =
             std::collections::HashMap::new();
+        let mut touched_docs = roaring::RoaringBitmap::new();
 
         for path in &parseable {
             let content = fs::read(path)?;
@@ -891,17 +908,8 @@ impl IngestionPipeline {
             if let Some(existing) = existing_by_path.remove(path) {
                 // Already registered
                 if existing.blake3_hash == hash_bytes {
-                    // Unchanged — skip, but still collect bitmap keys so bulk_put is correct
-                    let parser = self.find_parser(path).expect("already filtered");
-                    let result = parser.parse(path, &content)?;
-                    let source = Self::infer_source_type(&result);
-                    let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
-                    for key in keys {
-                        all_bitmap_entries
-                            .entry(key)
-                            .or_insert_with(roaring::RoaringBitmap::new)
-                            .insert(existing.doc_id);
-                    }
+                    // Unchanged — a real skip. Bitmaps are merged (not rebuilt)
+                    // at the end of the run, so existing entries survive.
                     docs_skipped += 1;
                 } else {
                     // Changed — update
@@ -930,13 +938,23 @@ impl IngestionPipeline {
                         );
                     }
 
-                    let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
-                    for key in keys {
+                    let new_keys: HashSet<BitmapKey> = self
+                        .enriched_bitmap_keys(path, &content, &source, &result)
+                        .into_iter()
+                        .collect();
+                    let old_keys = self.old_keys_for(existing.doc_id)?;
+                    for key in old_keys.difference(&new_keys) {
+                        self.bitmap_store.remove_id(key, existing.doc_id)?;
+                    }
+                    for key in new_keys.difference(&old_keys) {
                         all_bitmap_entries
-                            .entry(key)
+                            .entry(key.clone())
                             .or_insert_with(roaring::RoaringBitmap::new)
                             .insert(existing.doc_id);
                     }
+                    let new_keys_vec: Vec<BitmapKey> = new_keys.into_iter().collect();
+                    self.registry.set_doc_keys(existing.doc_id, &new_keys_vec)?;
+                    touched_docs.insert(existing.doc_id);
                     docs_updated += 1;
                 }
             } else {
@@ -973,12 +991,14 @@ impl IngestionPipeline {
                 }
 
                 let keys = self.enriched_bitmap_keys(path, &content, &source, &result);
+                self.registry.set_doc_keys(doc_id, &keys)?;
                 for key in keys {
                     all_bitmap_entries
                         .entry(key)
                         .or_insert_with(roaring::RoaringBitmap::new)
                         .insert(doc_id);
                 }
+                touched_docs.insert(doc_id);
                 docs_indexed += 1;
             }
         }
@@ -987,15 +1007,9 @@ impl IngestionPipeline {
         // Only consider docs whose paths are under root (don't tombstone docs from other vaults)
         for (path, doc) in &existing_by_path {
             if path.starts_with(root) && !on_disk.contains(path) {
+                // Lazy delete: tombstone only — compact() scrubs bitmaps later
+                // via the registry's doc->keys bookkeeping.
                 self.bitmap_store.tombstone(doc.doc_id)?;
-                // Remove from all bitmaps
-                let all_keys = self.bitmap_store.list_keys(None)?;
-                for key in &all_keys {
-                    let bm = self.bitmap_store.get(key)?;
-                    if bm.contains(doc.doc_id) {
-                        self.bitmap_store.remove_id(key, doc.doc_id)?;
-                    }
-                }
                 // Remove graph edges in both directions
                 if let Some(gs) = &mut self.graph_store {
                     if let Err(e) = gs.remove_doc_edges(doc.doc_id) {
@@ -1006,11 +1020,23 @@ impl IngestionPipeline {
             }
         }
 
-        // Bulk put bitmaps (merge with existing)
+        // Merge pending inserts with what's already stored, then write the
+        // merged bitmaps in one transaction. bulk_put has replace semantics,
+        // so the read-merge step is what makes this incremental.
         let bitmaps_created = all_bitmap_entries.len() as u32;
-        let entries: Vec<(BitmapKey, roaring::RoaringBitmap)> =
-            all_bitmap_entries.into_iter().collect();
-        self.bitmap_store.bulk_put(entries)?;
+        let mut merged: Vec<(BitmapKey, roaring::RoaringBitmap)> =
+            Vec::with_capacity(all_bitmap_entries.len() + 1);
+        for (key, ids) in all_bitmap_entries {
+            let mut bm = self.bitmap_store.get(&key)?;
+            bm |= ids;
+            merged.push((key, bm));
+        }
+        if !touched_docs.is_empty() {
+            let mut all_docs = self.bitmap_store.get(ALL_DOCS_KEY)?;
+            all_docs |= touched_docs;
+            merged.push((ALL_DOCS_KEY.to_string(), all_docs));
+        }
+        self.bitmap_store.bulk_put(merged)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
         info!(docs_indexed, docs_updated, docs_skipped, docs_tombstoned, bitmaps_created, duration_ms, "bulk index complete");
@@ -1116,30 +1142,42 @@ impl IngestionPipeline {
         }
 
         let doc_ids: Vec<DocId> = tombstones.iter().collect();
-        let all_keys = self.bitmap_store.list_keys(None)?;
 
-        // Remove tombstoned IDs from every bitmap
-        let mut bitmaps_cleaned = 0u32;
-        for key in &all_keys {
-            let bm = self.bitmap_store.get(key)?;
-            let mut dirty = false;
-            for &doc_id in &doc_ids {
-                if bm.contains(doc_id) {
-                    dirty = true;
-                }
+        // Group removals per key using registry bookkeeping; legacy docs
+        // without recorded keys fall back to a full bitmap-store scan.
+        let mut removals: std::collections::HashMap<BitmapKey, Vec<DocId>> =
+            std::collections::HashMap::new();
+        for &doc_id in &doc_ids {
+            for key in self.old_keys_for(doc_id)? {
+                removals.entry(key).or_default().push(doc_id);
             }
-            if dirty {
-                let mut bm = bm;
-                for &doc_id in &doc_ids {
-                    bm.remove(doc_id);
-                }
+        }
+
+        let mut bitmaps_cleaned = 0u32;
+        for (key, ids) in removals {
+            let mut bm = self.bitmap_store.get(&key)?;
+            let before = bm.len();
+            for id in ids {
+                bm.remove(id);
+            }
+            if bm.len() != before {
                 if bm.is_empty() {
-                    self.bitmap_store.delete(key)?;
+                    self.bitmap_store.delete(&key)?;
                 } else {
-                    self.bitmap_store.put(key, &bm)?;
+                    self.bitmap_store.put(&key, &bm)?;
                 }
                 bitmaps_cleaned += 1;
             }
+        }
+
+        // Drop the compacted ids from the universe bitmap.
+        let mut all_docs = self.bitmap_store.get(ALL_DOCS_KEY)?;
+        let before = all_docs.len();
+        for &doc_id in &doc_ids {
+            all_docs.remove(doc_id);
+        }
+        if all_docs.len() != before {
+            self.bitmap_store.put(ALL_DOCS_KEY, &all_docs)?;
         }
 
         // Delete docs from registry (ignore NotFound — may already be gone)
