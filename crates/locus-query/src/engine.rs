@@ -5,7 +5,7 @@ use std::time::Instant;
 use roaring::RoaringBitmap;
 use tracing::instrument;
 
-use locus_core::bitmap::BitmapStore;
+use locus_core::bitmap::{BitmapStore, ALL_DOCS_KEY};
 use locus_core::graph::{GraphQueryEngine, ExpandSpec};
 use locus_core::query::{
     nest_chunks, ChunkPointer, Filter, FilterEntry, IndexStatus,
@@ -66,12 +66,14 @@ impl BitmapQueryEngine {
             }
             Filter::Not(inner) => {
                 // NOT is relative to the universe of all non-tombstoned docs.
-                // Universe = union of all bitmaps minus tombstones.
-                // For efficiency, we use all keys to build the universe.
-                let all_keys = self.bitmap_store.list_keys(None)?;
-                let mut universe = RoaringBitmap::new();
-                for key in &all_keys {
-                    universe |= self.bitmap_store.get(key)?;
+                // The pipeline maintains __all_docs__ for exactly this; fall
+                // back to union-of-all-bitmaps for indexes built before B2.
+                let mut universe = self.bitmap_store.get(ALL_DOCS_KEY)?;
+                if universe.is_empty() {
+                    let all_keys = self.bitmap_store.list_keys(None)?;
+                    for key in &all_keys {
+                        universe |= self.bitmap_store.get(key)?;
+                    }
                 }
                 let tombstones = self.bitmap_store.get_tombstone()?;
                 universe -= tombstones;

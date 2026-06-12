@@ -326,6 +326,19 @@ pub trait Registry: Send + Sync {
     /// Default impl loops get_chunks; DuckDbRegistry overrides with one SQL IN query.
     fn get_chunks_for_docs(&self, doc_ids: &[DocId]) -> Result<Vec<ChunkRecord>, RegistryError>;
 
+    // --- Doc → bitmap-key bookkeeping ---
+    // Records which bitmap keys each doc contributes to, so re-index diffs
+    // and compaction are O(doc's keys) instead of a full bitmap-store scan.
+
+    /// Replace the recorded bitmap keys for a document (deduplicated).
+    fn set_doc_keys(&mut self, doc_id: DocId, keys: &[BitmapKey]) -> Result<(), RegistryError>;
+
+    /// Keys this doc contributes to; empty for pre-B2 docs (callers fall back to a scan).
+    fn get_doc_keys(&self, doc_id: DocId) -> Result<Vec<BitmapKey>, RegistryError>;
+
+    /// Remove all recorded keys for a document (compaction).
+    fn delete_doc_keys(&mut self, doc_id: DocId) -> Result<(), RegistryError>;
+
     // --- Bitmap catalog ---
 
     /// Upsert a bitmap catalog entry (set cardinality + timestamp).

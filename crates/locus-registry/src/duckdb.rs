@@ -7,8 +7,8 @@ use locus_core::registry::{
     BitmapCatalogEntry, ChunkRecord, DocRecord, GlobalState, NewChunk, NewDoc,
 };
 use locus_core::{
-    BitmapCategory, ChunkId, ChunkKind, ChunkMetadata, DocId, DocType, Registry, RegistryError,
-    SourceType, Timestamp, Visibility,
+    BitmapCategory, BitmapKey, ChunkId, ChunkKind, ChunkMetadata, DocId, DocType, Registry,
+    RegistryError, SourceType, Timestamp, Visibility,
 };
 use duckdb::{params, Connection};
 use tracing::instrument;
@@ -120,6 +120,12 @@ impl DuckDbRegistry {
 
                 CREATE INDEX IF NOT EXISTS idx_doc_chunk_ranges_range
                     ON doc_chunk_ranges(chunk_start, chunk_end);
+
+                CREATE TABLE IF NOT EXISTS doc_bitmap_keys (
+                    doc_id     UINTEGER NOT NULL,
+                    bitmap_key TEXT     NOT NULL,
+                    PRIMARY KEY (doc_id, bitmap_key)
+                );
                 ",
             )
             .map_err(|e| RegistryError::Database(e.to_string()))?;
@@ -490,6 +496,8 @@ impl Registry for DuckDbRegistry {
             .map_err(|e| RegistryError::Database(e.to_string()))?;
         conn.execute("DELETE FROM doc_chunk_ranges WHERE doc_id = ?", params![doc_id])
             .map_err(|e| RegistryError::Database(e.to_string()))?;
+        conn.execute("DELETE FROM doc_bitmap_keys WHERE doc_id = ?", params![doc_id])
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
         let affected = conn
             .execute("DELETE FROM documents WHERE doc_id = ?", params![doc_id])
             .map_err(|e| RegistryError::Database(e.to_string()))?;
@@ -680,6 +688,42 @@ impl Registry for DuckDbRegistry {
             results.push(row.map_err(|e| RegistryError::Database(e.to_string()))?);
         }
         Ok(results)
+    }
+
+    fn set_doc_keys(&mut self, doc_id: DocId, keys: &[BitmapKey]) -> Result<(), RegistryError> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM doc_bitmap_keys WHERE doc_id = ?", params![doc_id])
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("INSERT OR IGNORE INTO doc_bitmap_keys (doc_id, bitmap_key) VALUES (?, ?)")
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        for key in keys {
+            stmt.execute(params![doc_id, key])
+                .map_err(|e| RegistryError::Database(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn get_doc_keys(&self, doc_id: DocId) -> Result<Vec<BitmapKey>, RegistryError> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare("SELECT bitmap_key FROM doc_bitmap_keys WHERE doc_id = ? ORDER BY bitmap_key")
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![doc_id], |row| row.get::<_, String>(0))
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        let mut keys = Vec::new();
+        for row in rows {
+            keys.push(row.map_err(|e| RegistryError::Database(e.to_string()))?);
+        }
+        Ok(keys)
+    }
+
+    fn delete_doc_keys(&mut self, doc_id: DocId) -> Result<(), RegistryError> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM doc_bitmap_keys WHERE doc_id = ?", params![doc_id])
+            .map_err(|e| RegistryError::Database(e.to_string()))?;
+        Ok(())
     }
 
     #[instrument(skip(self, entry))]

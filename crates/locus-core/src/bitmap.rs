@@ -2,6 +2,11 @@ use roaring::RoaringBitmap;
 
 use crate::{BitmapKey, DocId};
 
+/// Reserved key for the universe bitmap: every live (non-tombstoned) doc id.
+/// Maintained by the ingestion pipeline; used for NOT queries and match-all.
+/// Hidden from `list_keys` like the tombstone bitmap.
+pub const ALL_DOCS_KEY: &str = "__all_docs__";
+
 /// Pluggable bitmap storage backend.
 /// LMDB/heed is the primary implementation; in-memory for tests.
 pub trait BitmapStore: Send + Sync {

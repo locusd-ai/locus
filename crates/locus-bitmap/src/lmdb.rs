@@ -176,7 +176,7 @@ impl BitmapStore for LmdbBitmapStore {
         let mut keys = Vec::new();
         for result in iter {
             let (key, _) = result.map_err(|e| BitmapError::Storage(e.to_string()))?;
-            if key == TOMBSTONE_KEY {
+            if key == TOMBSTONE_KEY || key == locus_core::bitmap::ALL_DOCS_KEY {
                 continue;
             }
             match prefix {
