@@ -1,0 +1,762 @@
+<title>Locus — the index at the back of your codebase</title>
+
+<style>
+/*__FONTS__*/
+
+/* ---- tokens: complete light palette on bare :root ---- */
+:root{
+  --paper:#E9EDE9;
+  --card:#F6F8F5;
+  --card-2:#E2E7E2;
+  --ink:#131A17;
+  --ink-2:#5A665E;
+  --ink-3:#84908A;
+  --rule:#C4CEC5;
+  --rule-soft:#D5DDD6;
+  --signal:#A8331C;
+  --signal-soft:#A8331C1a;
+  --shadow:0 1px 0 #ffffff80, 0 1px 2px #131a1712;
+
+  --serif:"Source Serif 4",Charter,"Bitstream Charter",Georgia,serif;
+  --mono:"IBM Plex Mono","DejaVu Sans Mono",ui-monospace,monospace;
+
+  --measure:38rem;
+  --rail:9.5rem;
+  --gutter:2.5rem;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0E1311;
+    --card:#151C18;
+    --card-2:#1B231E;
+    --ink:#E3E9E3;
+    --ink-2:#8A968E;
+    --ink-3:#69756E;
+    --rule:#242E27;
+    --rule-soft:#1D2621;
+    --signal:#E0705A;
+    --signal-soft:#e0705a1f;
+    --shadow:0 1px 0 #ffffff08, 0 1px 3px #00000040;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0E1311;
+  --card:#151C18;
+  --card-2:#1B231E;
+  --ink:#E3E9E3;
+  --ink-2:#8A968E;
+  --ink-3:#69756E;
+  --rule:#242E27;
+  --rule-soft:#1D2621;
+  --signal:#E0705A;
+  --signal-soft:#e0705a1f;
+  --shadow:0 1px 0 #ffffff08, 0 1px 3px #00000040;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--serif);
+  font-size:1.0625rem;
+  line-height:1.62;
+  font-variant-numeric:oldstyle-nums proportional-nums;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* faint ledger ruling, the paper this index is printed on */
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  z-index:0;
+  background:repeating-linear-gradient(
+    to bottom,
+    transparent 0 calc(1.62em - 1px),
+    var(--rule-soft) calc(1.62em - 1px) 1.62em
+  );
+  opacity:.5;
+  mask-image:linear-gradient(to bottom,#000 0,#0000 62vh);
+  -webkit-mask-image:linear-gradient(to bottom,#000 0,#0000 62vh);
+}
+
+.page{position:relative;z-index:1}
+
+/* ---- layout: measured column + locator rail ---- */
+.band{
+  display:grid;
+  grid-template-columns:var(--rail) minmax(0,var(--measure));
+  gap:0 var(--gutter);
+  justify-content:center;
+  padding:0 1.5rem;
+}
+.band > .rail{grid-column:1}
+.band > .col{grid-column:2;min-width:0}
+@media (max-width:62rem){
+  .band{grid-template-columns:minmax(0,var(--measure));justify-content:center}
+  .band > .rail{display:none}
+  .band > .col{grid-column:1}
+}
+
+/* content that breaks out past the text measure */
+.wide{
+  width:calc(100% + var(--rail) + var(--gutter));
+  max-width:calc(100vw - 3rem);
+  margin-left:calc(-1 * (var(--rail) + var(--gutter)));
+}
+@media (max-width:62rem){ .wide{width:100%;margin-left:0} }
+
+/* ---- shared type ---- */
+.label{
+  font-family:var(--mono);
+  font-size:.6875rem;
+  font-weight:500;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+a{color:inherit;text-underline-offset:.18em;text-decoration-thickness:.5px}
+a:focus-visible,button:focus-visible{
+  outline:2px solid var(--signal);
+  outline-offset:3px;
+  border-radius:2px;
+}
+
+/* ---- masthead ---- */
+.masthead{
+  border-bottom:1px solid var(--rule);
+  padding-block:1.1rem;
+  margin-bottom:clamp(3rem,9vh,5.5rem);
+}
+.masthead .col{display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap}
+.masthead .wordmark{
+  font-family:var(--mono);
+  font-weight:600;
+  font-size:.8125rem;
+  letter-spacing:.2em;
+  text-transform:uppercase;
+}
+.masthead .dot{width:5px;height:5px;background:var(--signal);border-radius:50%;align-self:center}
+.masthead .tag{font-size:.9375rem;color:var(--ink-2);font-style:italic}
+.masthead .spacer{flex:1}
+.masthead .lic{font-family:var(--mono);font-size:.75rem;color:var(--ink-3)}
+
+/* ---- hero: the headword ---- */
+.headword{
+  font-size:clamp(4.25rem,17vw,10.5rem);
+  line-height:.84;
+  font-weight:700;
+  letter-spacing:-.045em;
+  margin:0;
+  text-wrap:balance;
+  font-variant-numeric:lining-nums;
+}
+.headword .pron{
+  display:block;
+  font-family:var(--mono);
+  font-size:clamp(.7rem,1.6vw,.8125rem);
+  font-weight:400;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  margin-top:1.6rem;
+  letter-spacing:.2em;
+  line-height:1.75;
+}
+.deck{
+  font-size:clamp(1.3rem,2.6vw,1.6rem);
+  line-height:1.36;
+  margin:1.9rem 0 0;
+  text-wrap:balance;
+  max-width:30ch;
+}
+.deck em{font-style:italic;color:var(--signal)}
+.sub{
+  color:var(--ink-2);
+  margin:1.15rem 0 0;
+  max-width:56ch;
+}
+
+/* ---- the demo slab ---- */
+.slab{
+  margin-top:3rem;
+  background:var(--card);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.slab-head{
+  display:flex;
+  align-items:center;
+  gap:.6rem;
+  padding:.6rem .95rem;
+  border-bottom:1px solid var(--rule);
+  background:var(--card-2);
+}
+.slab-head .t{font-family:var(--mono);font-size:.6875rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+.slab-body{padding:1rem .95rem 1.15rem;overflow-x:auto}
+.term{
+  font-family:var(--mono);
+  font-size:.8125rem;
+  line-height:1.85;
+  font-variant-numeric:tabular-nums;
+  min-width:34rem;
+}
+.term .ps1{color:var(--ink-3)}
+.term .cmd{color:var(--ink)}
+.term .str{color:var(--signal)}
+.caret{
+  display:inline-block;
+  width:.55em;
+  height:1.05em;
+  background:var(--signal);
+  vertical-align:-.2em;
+  animation:blink 1.05s steps(1) infinite;
+}
+@keyframes blink{50%{opacity:0}}
+.caret.done{display:none}
+
+.term .file{
+  color:var(--ink-2);
+  margin-top:.85rem;
+  display:block;
+}
+.term .file:first-of-type{margin-top:.5rem}
+
+/* pointer row = index entry with dot leader */
+.ptr{
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:baseline;
+  gap:.55rem;
+  padding-left:1.5rem;
+}
+.ptr .sym{color:var(--ink);font-weight:500}
+.ptr .lead{
+  border-bottom:1px dotted var(--rule);
+  transform:translateY(-.28em);
+  min-width:1.5rem;
+}
+.ptr .loc{color:var(--signal);white-space:nowrap}
+
+/* reveal choreography */
+.reveal{opacity:0;transform:translateY(.35em)}
+.reveal.in{opacity:1;transform:none;transition:opacity .34s ease,transform .34s ease}
+
+.slab-foot{
+  border-top:1px solid var(--rule);
+  padding:.8rem .95rem;
+  display:flex;
+  gap:.5rem 1.4rem;
+  flex-wrap:wrap;
+  align-items:baseline;
+  background:var(--card-2);
+}
+.slab-foot p{margin:0;font-size:.875rem;color:var(--ink-2);max-width:60ch}
+.slab-foot b{color:var(--ink);font-weight:600}
+
+/* ---- section headers with locators ---- */
+section{margin-top:clamp(4rem,11vh,7rem)}
+.sec{
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:baseline;
+  gap:.7rem;
+  margin:0 0 1.6rem;
+  font-size:1.5rem;
+  font-weight:600;
+  letter-spacing:-.012em;
+}
+.sec .lead{border-bottom:1px dotted var(--rule);transform:translateY(-.3em)}
+.sec .loc{
+  font-family:var(--mono);
+  font-size:.75rem;
+  font-weight:500;
+  letter-spacing:.06em;
+  color:var(--signal);
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+.rail-note{
+  font-family:var(--mono);
+  font-size:.6875rem;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  text-align:right;
+  padding-top:.55rem;
+  line-height:1.5;
+}
+p{margin:0 0 1.05rem}
+p:last-child{margin-bottom:0}
+strong{font-weight:600}
+
+/* ---- comparison table ---- */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:31rem;font-size:.875rem}
+caption{
+  caption-side:bottom;
+  text-align:left;
+  padding:.75rem .9rem;
+  font-size:.8125rem;
+  color:var(--ink-3);
+  border-top:1px solid var(--rule);
+  line-height:1.5;
+}
+th,td{padding:.55rem .9rem;text-align:left;border-bottom:1px solid var(--rule-soft)}
+thead th{
+  font-family:var(--mono);
+  font-size:.6875rem;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  font-weight:500;
+  border-bottom:1px solid var(--rule);
+  background:var(--card-2);
+}
+tbody tr:last-child td{border-bottom:none}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+tr.win td{background:var(--signal-soft)}
+tr.win td.num,tr.win td b{color:var(--signal);font-weight:600}
+
+/* ---- stages ---- */
+.stages{display:flex;flex-direction:column;gap:1.35rem;margin:0;padding:0;list-style:none;counter-reset:stage}
+.stage{
+  display:grid;
+  grid-template-columns:auto 1fr;
+  gap:0 1.05rem;
+  padding-bottom:1.35rem;
+  border-bottom:1px solid var(--rule-soft);
+}
+.stages li:last-child .stage,.stage:last-child{border-bottom:none;padding-bottom:0}
+.stage .n{
+  counter-increment:stage;
+  font-family:var(--mono);
+  font-size:.6875rem;
+  font-weight:600;
+  letter-spacing:.1em;
+  color:var(--signal);
+  padding-top:.42rem;
+  font-variant-numeric:tabular-nums;
+}
+.stage .n::before{content:counter(stage,decimal-leading-zero)}
+.stage h3{margin:0 0 .3rem;font-size:1.0625rem;font-weight:600}
+.stage p{margin:0;color:var(--ink-2);font-size:.9375rem}
+.stage code,.inline-code{
+  font-family:var(--mono);
+  font-size:.8125em;
+  background:var(--card);
+  border:1px solid var(--rule);
+  border-radius:2px;
+  padding:.05em .26em;
+  color:var(--ink);
+  white-space:nowrap;
+}
+.stage .cost{
+  grid-column:2;
+  margin-top:.55rem;
+  font-family:var(--mono);
+  font-size:.75rem;
+  color:var(--signal);
+  letter-spacing:.04em;
+  font-variant-numeric:tabular-nums;
+}
+
+/* ---- source + tool lists ---- */
+.entries{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.entries li{
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:baseline;
+  gap:.55rem;
+  padding:.5rem 0;
+  border-bottom:1px solid var(--rule-soft);
+  font-size:.9375rem;
+}
+.entries li:last-child{border-bottom:none}
+.entries .k{font-weight:600}
+.entries .lead{border-bottom:1px dotted var(--rule);transform:translateY(-.3em);min-width:1rem}
+.entries .v{
+  font-family:var(--mono);
+  font-size:.75rem;
+  color:var(--ink-2);
+  text-align:right;
+  font-variant-numeric:tabular-nums;
+}
+
+.tools{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(11rem,1fr));
+  gap:.5rem;
+  margin:1.4rem 0 0;
+  padding:0;
+  list-style:none;
+}
+.tools li{
+  font-family:var(--mono);
+  font-size:.8125rem;
+  padding:.5rem .6rem;
+  background:var(--card);
+  border:1px solid var(--rule);
+  border-radius:2px;
+  color:var(--ink-2);
+}
+.tools li b{color:var(--signal);font-weight:500}
+
+/* ---- install ---- */
+.install{
+  background:var(--card);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  padding:1.05rem 1.1rem;
+  overflow-x:auto;
+  box-shadow:var(--shadow);
+}
+.install pre{
+  margin:0;
+  font-family:var(--mono);
+  font-size:.8125rem;
+  line-height:1.95;
+  min-width:26rem;
+}
+.install .ps1{color:var(--ink-3)}
+.install .cm{color:var(--ink-3);font-style:italic}
+.install .hl{color:var(--signal)}
+
+/* ---- closing principles ---- */
+.principles{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.95rem}
+.principles li{display:grid;grid-template-columns:auto 1fr;gap:.85rem;align-items:baseline}
+.principles .m{color:var(--signal);font-family:var(--mono);font-size:.8125rem}
+.principles b{font-weight:600}
+.principles span.t{color:var(--ink-2)}
+
+footer{
+  margin-top:clamp(4rem,11vh,7rem);
+  border-top:1px solid var(--rule);
+  padding:1.4rem 0 3.5rem;
+}
+footer .col{display:flex;gap:.75rem 1.5rem;flex-wrap:wrap;align-items:baseline}
+footer .mono{font-size:.75rem;color:var(--ink-3)}
+footer .spacer{flex:1}
+
+@media (prefers-reduced-motion:reduce){
+  .reveal{opacity:1;transform:none;transition:none}
+  .caret{animation:none}
+  *{scroll-behavior:auto!important}
+}
+</style>
+
+<div class="page">
+
+<header class="masthead band">
+  <div class="rail"></div>
+  <div class="col">
+    <span class="wordmark">Locus</span>
+    <span class="dot" aria-hidden="true"></span>
+    <span class="tag">a local-first index for AI agents</span>
+    <span class="spacer"></span>
+    <span class="lic">Rust · MIT</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ HERO ============ -->
+  <div class="band">
+    <div class="rail"></div>
+    <div class="col">
+      <h1 class="headword">
+        Locus<span class="pron">/ˈloʊkəs/ · the set of all points satisfying a condition</span>
+      </h1>
+
+      <p class="deck">Your agent greps, guesses, and dumps whole files into its context. Locus hands it <em>pointers</em> instead.</p>
+
+      <p class="sub">Index your code and notes once. Ask a structural question, get back the exact file, symbol, and byte range — plus why it matched. The agent reads only what it picks. Nothing leaves your machine.</p>
+
+      <!-- demo -->
+      <div class="slab wide" id="demo">
+        <div class="slab-head">
+          <span class="t">locus search</span>
+        </div>
+        <div class="slab-body">
+          <div class="term">
+            <div><span class="ps1">$</span> <span class="cmd">locus search </span><span class="str">"<span id="typed"></span>"</span><span class="caret" id="caret" aria-hidden="true"></span></div>
+
+            <div id="results" aria-live="polite">
+              <span class="file reveal" data-step="1">crates/locus-query/src/engine.rs</span>
+              <div class="ptr reveal" data-step="1">
+                <span class="sym">semantic_query</span><span class="lead"></span><span class="loc">8454..13843</span>
+              </div>
+              <div class="ptr reveal" data-step="2">
+                <span class="sym">graph_expand</span><span class="lead"></span><span class="loc">1388..1742</span>
+              </div>
+
+              <span class="file reveal" data-step="3">crates/locus-embed/src/usearch.rs</span>
+              <div class="ptr reveal" data-step="3">
+                <span class="sym">UsearchVectorStore::new</span><span class="lead"></span><span class="loc">585..1670</span>
+              </div>
+
+              <span class="file reveal" data-step="4">crates/locus-embed/src/fastembed.rs</span>
+              <div class="ptr reveal" data-step="4">
+                <span class="sym">FastEmbedEmbedder::with_model</span><span class="lead"></span><span class="loc">953..1647</span>
+              </div>
+
+              <span class="file reveal" data-step="5">crates/locus-query/src/filter_parser.rs</span>
+              <div class="ptr reveal" data-step="5">
+                <span class="sym">parse_filter</span><span class="lead"></span><span class="loc">11441..12724</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="slab-foot reveal" data-step="6">
+          <p>Those paths and byte ranges are real, from this repository. The answer is <b>~380 bytes</b>. Reading the four files it points into would have cost <b>54,972</b>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ THE PROBLEM ============ -->
+  <section class="band">
+    <div class="rail"><div class="rail-note">Measured<br>on this repo</div></div>
+    <div class="col">
+      <h2 class="sec"><span>Context is the budget</span><span class="lead"></span><span class="loc">72 documents</span></h2>
+
+      <p>Ask an agent “where is database access implemented?” It greps, gets nineteen hits, and reads all nineteen files: <span class="mono">80,824</span> tokens spent to find out where to look. Locus answers the same question with a <span class="mono">20,940</span>-token digest of labelled pointers. Do this eight times in a session and the difference stops being a rounding error — the window goes to rediscovery instead of reasoning.</p>
+
+      <p>Across eight such questions, answered from an index Locus already built — same corpus, same questions, three strategies:</p>
+
+      <div class="tbl-wrap wide">
+        <table>
+          <caption>Eight “where is…?” questions over this repository’s <span class="mono">crates/</span> — 72 documents, 1,099 chunks. Tokens approximated as bytes ÷ 4. Reproduce with <span class="mono">scripts/token-bench.py</span>.</caption>
+          <thead>
+            <tr><th scope="col">Strategy</th><th scope="col" style="text-align:right">Tokens into context</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>grep, then read every matching file</td><td class="num">568,502</td></tr>
+            <tr><td>grep -C20, the disciplined agent</td><td class="num">587,629</td></tr>
+            <tr class="win"><td><b>Locus pointer digest</b></td><td class="num">79,587</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="margin-top:1.4rem">Seven times fewer, and the digest is often the whole answer — file, symbol and range are usually enough to know where to look. When content is genuinely needed, the agent reads the ranges it chose.</p>
+
+      <p>Some questions have no grep equivalent at all. <span class="inline-code">complexity:high</span>, <span class="inline-code">visibility:public</span>, <span class="inline-code">convention:test</span>, <span class="inline-code">async:true</span> — these aren’t strings in the file. They’re facts about the syntax tree, indexed at ingest.</p>
+    </div>
+  </section>
+
+  <!-- ============ HOW IT WORKS ============ -->
+  <section class="band">
+    <div class="rail"><div class="rail-note">Three stages,<br>cheapest first</div></div>
+    <div class="col">
+      <h2 class="sec"><span>How it resolves</span><span class="lead"></span><span class="loc">bitmap → vector → graph</span></h2>
+
+      <p>Each stage is more expensive than the last, so each one only ever sees what the stage before it kept.</p>
+
+      <ol class="stages">
+        <li class="stage">
+          <span class="n" aria-hidden="true"></span>
+          <div>
+            <h3>Bitmap pre-filter</h3>
+            <p>Every tag, folder, language, kind and convention is a Roaring bitmap over document IDs. <span class="inline-code">topic:database AND folder:crates/locus-query</span> is a handful of compressed bitwise ops — and it costs the same whether the corpus holds a thousand documents or a hundred thousand.</p>
+            <p class="cost">16µs single key · 19µs AND · at 100,000 documents, in memory</p>
+          </div>
+        </li>
+        <li class="stage">
+          <span class="n" aria-hidden="true"></span>
+          <div>
+            <h3>Semantic rerank</h3>
+            <p>Local ONNX embeddings and an HNSW index score <em>only</em> the candidates the bitmap kept. No GPU, no API key, no request leaving the machine. Vector search is linear in candidates, which is exactly why it runs second.</p>
+            <p class="cost">~25–55ms end to end, including query embedding</p>
+          </div>
+        </li>
+        <li class="stage">
+          <span class="n" aria-hidden="true"></span>
+          <div>
+            <h3>Graph expansion</h3>
+            <p>Wikilinks, imports and references form a graph. <span class="inline-code">locus graph expand</span> pulls the n-hop neighbourhood of a result; <span class="inline-code">locus graph central</span> finds the documents everything else leans on.</p>
+            <p class="cost">the load-bearing files, without reading any of them</p>
+          </div>
+        </li>
+      </ol>
+
+      <p style="margin-top:1.9rem">The bitmap stage is the reason the rest is affordable. Compared against every alternative you’d reasonably reach for, on compound queries at 100,000 documents:</p>
+
+      <div class="tbl-wrap wide">
+        <table>
+          <caption>AND query, median of 100 runs, in-memory store — isolating lookup cost from build cost. On-disk LMDB reads cost ~9ms cold, converging toward the in-memory figure once the daemon has warmed the page cache. Full method in <span class="mono">docs/benchmarks/REPORT.md</span>.</caption>
+          <thead>
+            <tr><th scope="col">Approach</th><th scope="col" style="text-align:right">AND query</th><th scope="col" style="text-align:right">Persists?</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>SQL (DuckDB)</td><td class="num">4,758µs</td><td class="num">yes</td></tr>
+            <tr><td>Property graph (petgraph)</td><td class="num">4,075µs</td><td class="num">no</td></tr>
+            <tr><td>HashSet intersection</td><td class="num">111µs</td><td class="num">no</td></tr>
+            <tr class="win"><td><b>Locus (Roaring bitmaps)</b></td><td class="num">19µs</td><td class="num">yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="margin-top:1.4rem">A HashSet beats Locus on a single-key lookup — nothing beats a hash. But intersection walks elements, so it degrades as sets grow, and it forgets everything when the process exits. Roaring intersects compressed blocks at a cost that barely moves, and the index is still there tomorrow.</p>
+    </div>
+  </section>
+
+  <!-- ============ SOURCES ============ -->
+  <section class="band">
+    <div class="rail"><div class="rail-note">Shipping<br>today</div></div>
+    <div class="col">
+      <h2 class="sec"><span>What it indexes</span><span class="lead"></span><span class="loc">6 sources</span></h2>
+
+      <ul class="entries">
+        <li><span class="k">Markdown &amp; Obsidian vaults</span><span class="lead"></span><span class="v">frontmatter · tags · wikilinks · sections</span></li>
+        <li><span class="k">Code, via tree-sitter</span><span class="lead"></span><span class="v">Rust · TypeScript · Python</span></li>
+        <li><span class="k">Confluence</span><span class="lead"></span><span class="v">space · label · author</span></li>
+        <li><span class="k">Jira</span><span class="lead"></span><span class="v">project · status · assignee · sprint</span></li>
+        <li><span class="k">Slack</span><span class="lead"></span><span class="v">channel · author · thread</span></li>
+        <li><span class="k">Anything that can POST JSON</span><span class="lead"></span><span class="v">webhook ingest</span></li>
+      </ul>
+
+      <p style="margin-top:1.5rem">Code parsing runs at ~9,500 files per second — roughly 75,000 AST chunks — and enrichment at ~66,000 files per second cold, ~325,000 warm. Re-indexing an unchanged vault is a blake3 hash and a map lookup, so it is essentially free. A <span class="inline-code">notify</span>-based watcher keeps the index live as you edit.</p>
+    </div>
+  </section>
+
+  <!-- ============ MCP ============ -->
+  <section class="band">
+    <div class="rail"><div class="rail-note">One command<br>to install</div></div>
+    <div class="col">
+      <h2 class="sec"><span>For the agent</span><span class="lead"></span><span class="loc">7 MCP tools</span></h2>
+
+      <p>The <span class="inline-code">locusd</span> daemon speaks MCP, so the engine shows up as tools your agent can call directly:</p>
+
+      <ul class="tools">
+        <li><b>locus_search</b></li>
+        <li><b>locus_semantic</b></li>
+        <li><b>locus_graph</b></li>
+        <li><b>locus_inspect</b></li>
+        <li><b>locus_filters</b></li>
+        <li><b>locus_status</b></li>
+        <li><b>locus_remote_ingest</b></li>
+      </ul>
+
+      <p style="margin-top:1.5rem"><span class="inline-code">locus_filters</span> is the one that changes the dynamic: the agent asks what keys exist before it asks anything else. It stops guessing at your directory names and starts querying a map it can actually read.</p>
+    </div>
+  </section>
+
+  <!-- ============ INSTALL ============ -->
+  <section class="band">
+    <div class="rail"><div class="rail-note">Start here</div></div>
+    <div class="col">
+      <h2 class="sec"><span>Install</span><span class="lead"></span><span class="loc">~/.locus</span></h2>
+
+      <div class="install wide">
+<pre><span class="ps1">$</span> git clone https://github.com/locusd-ai/locus &amp;&amp; cd locus
+<span class="ps1">$</span> cargo install --path crates/locus-cli
+<span class="ps1">$</span> cargo install --path crates/locus-daemon
+
+<span class="ps1">$</span> locus init ~/notes                  <span class="cm"># markdown or Obsidian</span>
+<span class="ps1">$</span> locus init ~/code/myrepo --type code
+<span class="ps1">$</span> locus index ~/code/myrepo
+
+<span class="ps1">$</span> locus search <span class="hl">"topic:database AND lang:rust"</span>
+<span class="ps1">$</span> locus semantic <span class="hl">"how do we handle auth?"</span>
+
+<span class="ps1">$</span> locus mcp install ~/code/myrepo      <span class="cm"># your agent now has a map</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PRINCIPLES ============ -->
+  <section class="band">
+    <div class="rail"></div>
+    <div class="col">
+      <h2 class="sec"><span>Three rules it doesn’t break</span><span class="lead"></span><span class="loc">by design</span></h2>
+
+      <ul class="principles">
+        <li><span class="m">§</span><span><b>Local-first.</b> <span class="t">The index lives in <span class="inline-code">~/.locus</span>. No cloud, no telemetry, no API keys, no account.</span></span></li>
+        <li><span class="m">§</span><span><b>Pointers, never content.</b> <span class="t">A query response cannot contain your file contents. That isn’t a setting — the response type has no field for it.</span></span></li>
+        <li><span class="m">§</span><span><b>Embedded-grade Rust.</b> <span class="t">DuckDB registry, LMDB and Roaring bitmaps, usearch HNSW, tree-sitter parsing. Sync core; async only at the daemon edge.</span></span></li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<footer class="band">
+  <div class="rail"></div>
+  <div class="col">
+    <span class="mono">locusd-ai/locus</span>
+    <span class="mono">MIT</span>
+    <span class="spacer"></span>
+    <span class="mono">Figures from docs/benchmarks — reproducible from the repo.</span>
+  </div>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var QUERY = 'lang:rust AND kind:function AND topic:vector';
+  var typed  = document.getElementById('typed');
+  var caret  = document.getElementById('caret');
+  var steps  = Array.prototype.slice.call(document.querySelectorAll('.reveal'));
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function revealAll(){
+    steps.forEach(function(el){ el.classList.add('in'); });
+    caret.classList.add('done');
+  }
+
+  if (reduced) {
+    typed.textContent = QUERY;
+    revealAll();
+    return;
+  }
+
+  // group reveals by their data-step so lines land in bursts, like results arriving
+  var groups = {};
+  steps.forEach(function(el){
+    var s = el.getAttribute('data-step') || '1';
+    (groups[s] = groups[s] || []).push(el);
+  });
+  var order = Object.keys(groups).sort(function(a,b){ return a-b; });
+
+  var i = 0;
+  function type(){
+    if (i <= QUERY.length) {
+      typed.textContent = QUERY.slice(0, i);
+      i++;
+      // uneven cadence reads as typing rather than as a machine
+      setTimeout(type, 18 + Math.random()*42);
+    } else {
+      caret.classList.add('done');
+      setTimeout(results, 260);
+    }
+  }
+
+  function results(){
+    order.forEach(function(key, idx){
+      setTimeout(function(){
+        groups[key].forEach(function(el){ el.classList.add('in'); });
+      }, idx * 150);
+    });
+  }
+
+  // only run once the demo is actually on screen
+  var demo = document.getElementById('demo');
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function(entries){
+      if (entries[0].isIntersecting) { io.disconnect(); setTimeout(type, 420); }
+    }, {threshold:.25});
+    io.observe(demo);
+  } else {
+    setTimeout(type, 420);
+  }
+})();
+</script>
